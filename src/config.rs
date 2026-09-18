@@ -1179,6 +1179,21 @@ pub fn version() {
 fn question(question: AnyQuestion, (no_confirm, c): &mut (bool, Colors)) {
     match question.question() {
         Question::SelectProvider(mut question) => {
+            #[cfg(feature = "tui")]
+            if crate::tui::bridge::connected() {
+                let choices = question
+                    .providers()
+                    .iter()
+                    .map(|p| format!("{}/{}", p.db().map(|db| db.name()).unwrap_or(""), p.name()))
+                    .collect::<Vec<_>>();
+                let index = crate::tui::bridge::choose(
+                    &format!("Select provider for {}", question.depend()),
+                    &choices,
+                )
+                .unwrap_or(0);
+                question.set_index(index as i32);
+                return;
+            }
             let providers = question.providers();
             let len = providers.len();
 

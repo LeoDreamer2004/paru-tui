@@ -1,5 +1,16 @@
 # Paru
 
+## Paru TUI fork
+
+Native Rust terminal interface with separate repository/AUR update panels, package search, and per-package-base proxy settings. The original CLI remains available.
+
+```sh
+cargo build --release --features tui --bin paru-tui
+./target/release/paru-tui
+```
+
+See [TUI 使用说明与当前限制](docs/TUI.md) and [architecture / upstream maintenance](docs/TUI-ARCHITECTURE.md).
+
 Feature packed AUR helper
 
 [![paru](https://img.shields.io/aur/version/paru?color=1793d1&label=paru&logo=arch-linux&style=for-the-badge)](https://aur.archlinux.org/packages/paru/)

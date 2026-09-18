@@ -84,6 +84,20 @@ pub fn command_status(cmd: &mut Command) -> Result<Status> {
 
     DEFAULT_SIGNALS.store(false, Ordering::Relaxed);
 
+    #[cfg(feature = "tui")]
+    let capture = crate::tui::bridge::connected()
+        && Path::new(cmd.get_program())
+            .file_name()
+            .is_some_and(|name| name == "sudo");
+    #[cfg(feature = "tui")]
+    let ret = if capture {
+        sudo_status(cmd)
+    } else {
+        cmd.status()
+            .map(|s| Status(s.code().unwrap_or(1)))
+            .with_context(|| command_err(cmd))
+    };
+    #[cfg(not(feature = "tui"))]
     let ret = cmd
         .status()
         .map(|s| Status(s.code().unwrap_or(1)))
@@ -95,6 +109,37 @@ pub fn command_status(cmd: &mut Command) -> Result<Status> {
         0 => ret,
         n => std::process::exit(128 + n as i32),
     }
+}
+
+#[cfg(feature = "tui")]
+fn sudo_status(cmd: &mut Command) -> Result<Status> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = tempfile::tempfile()?;
+    cmd.stderr(Stdio::from(file.try_clone()?));
+    let status = cmd
+        .status()
+        .map(|s| Status(s.code().unwrap_or(1)))
+        .with_context(|| command_err(cmd))?;
+    if status.0 != 0 {
+        let mut message = String::new();
+        file.seek(SeekFrom::Start(0))?;
+        file.take(8192).read_to_string(&mut message)?;
+        if !message.trim().is_empty() {
+            return Err(anyhow::Error::new(status).context(message.trim().to_owned()));
+        }
+    }
+    Ok(status)
+}
+#[cfg(all(test, feature = "tui"))]
+#[test]
+fn sudo_failure_retains_diagnostics_and_exit_code() {
+    let error = sudo_status(Command::new("/bin/sh").args([
+        "-c",
+        "printf 'sudo: 3 incorrect password attempts\n' >&2; exit 1",
+    ]))
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("3 incorrect password attempts"));
+    assert_eq!(error.downcast_ref::<Status>().unwrap().code(), 1);
 }
 
 pub fn command(cmd: &mut Command) -> Result<()> {
@@ -158,6 +203,8 @@ fn sudo_loop<S: AsRef<OsStr>>(sudo: &str, flags: &[S]) -> Result<()> {
 fn update_sudo<S: AsRef<OsStr>>(sudo: &str, flags: &[S]) -> Result<()> {
     let mut cmd = Command::new(sudo);
     cmd.args(flags);
+    #[cfg(feature = "tui")]
+    crate::tui::settings::configure_sudo(&mut cmd, sudo);
     let status = command_status(&mut cmd)?;
     status.success()?;
     Ok(())
@@ -184,7 +231,10 @@ fn new_pacman<S: AsRef<str> + Display + Debug>(config: &Config, args: &Args<S>) 
     let mut cmd = if config.need_root {
         wait_for_lock(config);
         let mut cmd = Command::new(&config.sudo_bin);
-        cmd.args(&config.sudo_flags).arg(args.bin.as_ref());
+        cmd.args(&config.sudo_flags);
+        #[cfg(feature = "tui")]
+        crate::tui::settings::configure_sudo(&mut cmd, &config.sudo_bin);
+        cmd.arg(args.bin.as_ref());
         cmd
     } else {
         Command::new(args.bin.as_ref())
@@ -198,6 +248,23 @@ fn new_pacman<S: AsRef<str> + Display + Debug>(config: &Config, args: &Args<S>) 
 }
 
 pub fn pacman<S: AsRef<str> + Display + Debug>(config: &Config, args: &Args<S>) -> Result<Status> {
+    #[cfg(feature = "tui")]
+    if std::env::var_os("PARU_TUI_SOCKET").is_some() {
+        if config.clean >= 2 {
+            let mut cmd = new_pacman(config, args);
+            let term = &*CAUGHT_SIGNAL;
+            DEFAULT_SIGNALS.store(false, Ordering::Relaxed);
+            let result = crate::tui::cache::execute(&mut cmd, || term.load(Ordering::Relaxed) != 0);
+            DEFAULT_SIGNALS.store(true, Ordering::Relaxed);
+            return match term.swap(0, Ordering::Relaxed) {
+                0 => result,
+                n => std::process::exit(128 + n as i32),
+            };
+        }
+        if config.need_root {
+            return crate::tui::transaction::execute(config, args);
+        }
+    }
     let mut cmd = new_pacman(config, args);
     command_status(&mut cmd)
 }
@@ -206,6 +273,16 @@ pub fn pacman_output<S: AsRef<str> + Display + std::fmt::Debug>(
     config: &Config,
     args: &Args<S>,
 ) -> Result<Output> {
+    #[cfg(feature = "tui")]
+    if std::env::var_os("PARU_TUI_SOCKET").is_some() && config.need_root {
+        use std::os::unix::process::ExitStatusExt;
+        let status = crate::tui::transaction::execute(config, args)?;
+        return Ok(Output {
+            status: std::process::ExitStatus::from_raw(status.0 << 8),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        });
+    }
     let mut cmd = new_pacman(config, args);
     cmd.stdin(Stdio::inherit());
     command_output(&mut cmd)
@@ -218,6 +295,8 @@ fn new_makepkg<S: AsRef<OsStr>>(
     pkgdest: Option<&str>,
 ) -> Command {
     let mut cmd = Command::new(&config.makepkg_bin);
+    #[cfg(feature = "tui")]
+    crate::tui::settings::configure_build(&mut cmd, dir);
     if let Some(mconf) = &config.makepkg_conf {
         cmd.arg("--config").arg(mconf);
     }
@@ -235,7 +314,24 @@ pub fn makepkg_dest<S: AsRef<OsStr>>(
     pkgdest: Option<&str>,
 ) -> Result<Status> {
     let mut cmd = new_makepkg(config, dir, args, pkgdest);
-    command_status(&mut cmd)
+    #[cfg(feature = "tui")]
+    crate::tui::bridge::build(
+        dir.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned(),
+        true,
+    )?;
+    let result = command_status(&mut cmd);
+    #[cfg(feature = "tui")]
+    crate::tui::bridge::build(
+        dir.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned(),
+        false,
+    )?;
+    result
 }
 
 pub fn makepkg<S: AsRef<OsStr>>(config: &Config, dir: &Path, args: &[S]) -> Result<Status> {

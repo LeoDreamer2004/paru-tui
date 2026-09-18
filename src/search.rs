@@ -126,7 +126,10 @@ fn search_local<'a>(config: &'a Config, targets: &[String]) -> Result<Vec<&'a al
     Ok(ret)
 }
 
-fn search_repos<'a>(config: &'a Config, targets: &[String]) -> Result<Vec<&'a alpm::Package>> {
+pub(crate) fn search_repos<'a>(
+    config: &'a Config,
+    targets: &[String],
+) -> Result<Vec<&'a alpm::Package>> {
     if targets.is_empty() || !config.mode.repo() {
         return Ok(Vec::new());
     }
@@ -189,7 +192,7 @@ async fn search_aur_regex(config: &Config, targets: &[String]) -> Result<Vec<rau
     Ok(pkgs)
 }
 
-async fn search_aur(config: &Config, targets: &[String]) -> Result<Vec<raur::Package>> {
+pub(crate) async fn search_aur(config: &Config, targets: &[String]) -> Result<Vec<raur::Package>> {
     if targets.is_empty() || !config.mode.aur() {
         return Ok(Vec::new());
     }
@@ -233,7 +236,7 @@ async fn search_aur(config: &Config, targets: &[String]) -> Result<Vec<raur::Pac
     };
 
     match config.sort_by {
-        SortBy::Votes => matches.sort_by(|a, b| b.num_votes.cmp(&a.num_votes)),
+        SortBy::Votes => matches.sort_by_key(|p| std::cmp::Reverse(p.num_votes)),
         SortBy::Popularity => {
             matches.sort_by(|a, b| b.popularity.partial_cmp(&a.popularity).unwrap())
         }

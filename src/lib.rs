@@ -21,6 +21,8 @@ mod repo;
 mod search;
 mod stats;
 mod sync;
+#[cfg(feature = "tui")]
+pub mod tui;
 mod upgrade;
 mod util;
 
@@ -74,6 +76,11 @@ fn alpm_debug_enabled() -> bool {
 }
 
 fn print_error(color: Style, err: Error) {
+    #[cfg(feature = "tui")]
+    if crate::tui::bridge::connected() {
+        crate::tui::bridge::notify(format!("Error: {err:#}"));
+    }
+
     let backtrace_enabled = match env::var("RUST_LIB_BACKTRACE") {
         Ok(s) => s != "0",
         Err(_) => match env::var("RUST_BACKTRACE") {
@@ -170,6 +177,18 @@ async fn run2<S: AsRef<str>>(config: &mut Config, args: &[S]) -> Result<i32> {
         config.parse_args(["-Syu"])?;
     } else {
         config.parse_args(args)?;
+    }
+    #[cfg(feature = "tui")]
+    {
+        crate::tui::settings::validate_worker(config.chroot)?;
+        if crate::tui::bridge::connected()
+            && config.need_root
+            && std::path::Path::new(&config.sudo_bin)
+                .file_name()
+                .is_none_or(|s| s != "sudo")
+        {
+            anyhow::bail!("Native authentication currently requires sudo with askpass support");
+        }
     }
 
     let aur_url = if config.ssh {

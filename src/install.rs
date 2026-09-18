@@ -1098,6 +1098,8 @@ impl Installer {
             return Ok(());
         }
 
+        #[cfg(feature = "tui")]
+        crate::tui::bridge::plan(actions);
         if config.pacman.verbose_pkg_lists {
             print_install_verbose(config, actions, &self.upgrades.devel);
         } else {
@@ -1707,6 +1709,44 @@ fn print_dir(
 }
 
 pub fn review(config: &Config, fetch: &aur_fetch::Fetch, pkgs: &[&str]) -> Result<()> {
+    #[cfg(feature = "tui")]
+    if crate::tui::bridge::connected() {
+        let unseen = fetch.unseen(pkgs)?;
+        let has_diff = fetch.has_diff(&unseen)?;
+        let diffs = fetch.diff(&has_diff, false)?;
+        for (&pkg, diff) in has_diff.iter().zip(diffs) {
+            if !crate::tui::bridge::confirm(
+                &format!("Review changes for {pkg}:\n\n{diff}\n\nAccept these changes?"),
+                false,
+            )
+            .unwrap_or(false)
+            {
+                return Status::err(1);
+            }
+        }
+        for &pkg in &unseen {
+            if !has_diff.contains(&pkg) {
+                let dir = fetch.clone_dir.join(pkg);
+                let mut text = Vec::new();
+                let mut buffer = Vec::new();
+                print_dir(config, &dir, &dir, &mut text, &mut buffer, false, 1)?;
+                let text = String::from_utf8_lossy(&text);
+                if !crate::tui::bridge::confirm(
+                    &format!(
+                        "Review build files for {pkg}:\n\n{text}\n\nAccept these build files?"
+                    ),
+                    false,
+                )
+                .unwrap_or(false)
+                {
+                    return Status::err(1);
+                }
+            }
+        }
+        fetch.mark_seen(pkgs)?;
+        return Ok(());
+    }
+
     let c = config.color;
 
     if pkgs.is_empty() {

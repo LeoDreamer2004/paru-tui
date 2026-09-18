@@ -64,7 +64,29 @@ pub fn check_pgp_keys(
                 base = base.join("  ")
             );
         }
-        if ask(config, "import?", true) {
+        let prompt = "import?".to_owned();
+        #[cfg(feature = "tui")]
+        let prompt = if crate::tui::bridge::connected() {
+            format!(
+                "Import build signing keys?\n{}",
+                import
+                    .iter()
+                    .map(|(key, bases)| format!(
+                        "{}: {}",
+                        key,
+                        bases
+                            .iter()
+                            .map(|b| b.package_base())
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    ))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        } else {
+            prompt
+        };
+        if ask(config, &prompt, true) {
             import_keys(config, &import)?;
         }
     }

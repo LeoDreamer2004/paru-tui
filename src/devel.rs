@@ -251,6 +251,7 @@ pub fn save_devel_info(config: &Config, devel_info: &DevelInfo) -> Result<()> {
 }
 
 async fn ls_remote_internal(
+    base: &str,
     git: &str,
     flags: &[String],
     remote: &str,
@@ -262,8 +263,19 @@ async fn ls_remote_internal(
     let git = "git";
 
     let mut command = AsyncCommand::new(git);
+    // The TUI Git helper needs the package base, not the source repository name.
+    command.env("PARU_TUI_BUILD_BASE", base).args(flags);
+    remote_commit(command, remote, branch).await
+}
+
+// Shared by the CLI and the read-only TUI scanner; callers choose the Git policy.
+pub(crate) async fn remote_commit(
+    mut command: AsyncCommand,
+    remote: &str,
+    branch: Option<&str>,
+) -> Result<String> {
     command
-        .args(flags)
+        .kill_on_drop(true)
         .env("GIT_TERMINAL_PROMPT", "0")
         .arg("ls-remote")
         .arg(remote)
@@ -276,15 +288,23 @@ async fn ls_remote_internal(
     }
 
     let sha = String::from_utf8_lossy(&output.stdout)
-        .split('\t')
+        .split_whitespace()
         .next()
-        .unwrap()
+        .unwrap_or_default()
         .to_string();
+
+    if !matches!(sha.len(), 40 | 64) || !sha.bytes().all(|c| c.is_ascii_hexdigit()) {
+        bail!(
+            "Git remote did not return a commit for {}",
+            branch.unwrap_or("HEAD")
+        );
+    }
 
     Ok(sha)
 }
 
 async fn ls_remote(
+    base: &str,
     style: Style,
     git: &str,
     flags: &[String],
@@ -293,7 +313,7 @@ async fn ls_remote(
 ) -> Result<String> {
     let remote = &remote;
     let time = Duration::from_secs(15);
-    let future = ls_remote_internal(git, flags, remote, branch);
+    let future = ls_remote_internal(base, git, flags, remote, branch);
     let future = timeout(time, future);
 
     if let Ok(v) = future.await {
@@ -463,8 +483,16 @@ pub async fn pkg_has_update<'pkg>(
             continue;
         }
 
-        futures
-            .push(has_update(config.color.error, &config.git_bin, &config.git_flags, info).boxed());
+        futures.push(
+            has_update(
+                pkg,
+                config.color.error,
+                &config.git_bin,
+                &config.git_flags,
+                info,
+            )
+            .boxed(),
+        );
     }
 
     if !futures.is_empty() && select_ok(futures).await.is_ok() {
@@ -474,8 +502,22 @@ pub async fn pkg_has_update<'pkg>(
     }
 }
 
-async fn has_update(style: Style, git: &str, flags: &[String], url: &RepoInfo) -> Result<()> {
-    let sha = ls_remote(style, git, flags, url.url.clone(), url.branch.as_deref()).await?;
+async fn has_update(
+    base: &str,
+    style: Style,
+    git: &str,
+    flags: &[String],
+    url: &RepoInfo,
+) -> Result<()> {
+    let sha = ls_remote(
+        base,
+        style,
+        git,
+        flags,
+        url.url.clone(),
+        url.branch.as_deref(),
+    )
+    .await?;
     debug!(
         "devel check {}: '{}' == '{}' different: {}",
         url.url,
@@ -516,6 +558,7 @@ pub async fn fetch_devel_info(
         for url in srcinfo.base.source.arch(arch) {
             if let Some((remote, _, branch)) = parse_url(url) {
                 let future = ls_remote(
+                    base.package_base(),
                     config.color.error,
                     &config.git_bin,
                     &config.git_flags,
@@ -556,9 +599,18 @@ pub async fn fetch_devel_info(
 }
 
 pub fn load_devel_info(config: &Config) -> Result<Option<DevelInfo>> {
+    let info = read_devel_info(config)?;
+    if let Some(info) = &info {
+        save_devel_info(config, info)?;
+    }
+    Ok(info)
+}
+
+pub(crate) fn read_devel_info(config: &Config) -> Result<Option<DevelInfo>> {
     let file = match read_to_string(&config.devel_path) {
         Ok(file) => file,
-        _ => return Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
     };
     let devel_info = DevelInfo::deserialize(toml::Deserializer::parse(&file)?)
         .with_context(|| tr!("invalid toml: {}", config.devel_path.display()))?;
@@ -586,8 +638,6 @@ pub fn load_devel_info(config: &Config) -> Result<Option<DevelInfo>> {
     devel_info
         .info
         .retain(|pkg, _| pkgbases.contains_key(pkg.as_str()));
-
-    save_devel_info(config, &devel_info)?;
 
     Ok(Some(devel_info))
 }

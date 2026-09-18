@@ -75,6 +75,29 @@ pub fn resolver<'a, 'b>(
         .custom_aur_namespace(Some(config.aur_namespace().to_string()))
         .is_devel(move |pkg| devel_suffixes.iter().any(|suff| pkg.ends_with(suff)))
         .group_callback(move |groups| {
+            #[cfg(feature = "tui")]
+            if crate::tui::bridge::connected() {
+                let members = groups
+                    .iter()
+                    .flat_map(|g| g.group.packages())
+                    .collect::<Vec<_>>();
+                let choices = members
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| format!("{}  {}", i + 1, p.name()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let reply = crate::tui::bridge::input(&format!(
+                    "Select group packages (empty = all):\n{choices}"
+                ))
+                .unwrap_or_default();
+                let menu = NumberMenu::new(reply.trim());
+                return members
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(i, p)| menu.contains(i + 1, p.name()).then_some(p))
+                    .collect();
+            }
             let total: usize = groups.iter().map(|g| g.group.packages().len()).sum();
             let mut pkgs = Vec::new();
             println!(
@@ -98,10 +121,8 @@ pub fn resolver<'a, 'b>(
                     print!("    ");
                 }
 
-                let mut n = 1;
-                for pkg in group.group.packages() {
+                for (n, pkg) in (1..).zip(group.group.packages()) {
                     print!("{}) {}  ", n, pkg.name());
-                    n += 1;
                 }
             }
 
@@ -118,13 +139,10 @@ pub fn resolver<'a, 'b>(
             }
 
             let menu = NumberMenu::new(input.trim());
-            let mut n = 1;
-
-            for pkg in groups.iter().flat_map(|g| g.group.packages()) {
+            for (n, pkg) in (1..).zip(groups.iter().flat_map(|g| g.group.packages())) {
                 if menu.contains(n, "") {
                     pkgs.push(pkg);
                 }
-                n += 1;
             }
 
             pkgs
@@ -137,6 +155,13 @@ pub fn resolver<'a, 'b>(
                 n = pkgs.len(),
                 pkg = dep
             );
+            #[cfg(feature = "tui")]
+            if !no_confirm {
+                let choices = pkgs.iter().map(|p| p.to_string()).collect::<Vec<_>>();
+                if let Some(index) = crate::tui::bridge::choose(&prompt, &choices) {
+                    return index;
+                }
+            }
             println!("{} {}", c.action.paint("::"), c.bold.paint(prompt));
             println!(
                 "{} {} {}:",

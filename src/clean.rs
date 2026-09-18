@@ -12,13 +12,23 @@ use std::path::Path;
 use std::process::Command;
 
 use alpm_utils::DbListExt;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use srcinfo::Srcinfo;
 use tr::tr;
 
 pub fn clean(config: &Config) -> Result<()> {
+    let mut failures = Vec::new();
     if config.mode.repo() {
-        exec::pacman(config, &config.args)?;
+        let result = exec::pacman(config, &config.args).and_then(|status| {
+            if status.code() == 0 {
+                Ok(())
+            } else {
+                bail!("pacman exited with code {}", status.code())
+            }
+        });
+        if let Some(message) = record_failure(&mut failures, "Pacman cache cleanup", result)? {
+            report_failure(config, message);
+        }
     }
 
     if config.mode.aur() {
@@ -41,18 +51,58 @@ pub fn clean(config: &Config) -> Result<()> {
         printtr!("Clone Directory: {}", config.fetch.clone_dir.display());
 
         if ask(config, &question, !remove_all) {
-            clean_aur(config, keep_installed, keep_current, remove_all, rm)?;
+            if let Some(message) = record_failure(
+                &mut failures,
+                "AUR clone cleanup",
+                clean_aur(config, keep_installed, keep_current, remove_all, rm),
+            )? {
+                report_failure(config, message);
+            }
         }
 
         printtr!("\nDiff Directory: {}", config.fetch.diff_dir.display());
 
         let question = tr!("Do you want to remove all saved diffs?");
         if ask(config, &question, true) {
-            clean_diff(config)?;
+            if let Some(message) =
+                record_failure(&mut failures, "Saved diff cleanup", clean_diff(config))?
+            {
+                report_failure(config, message);
+            }
         }
     }
 
-    Ok(())
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        bail!("Cache cleanup failed in {} stage(s)", failures.len())
+    }
+}
+
+fn record_failure(
+    failures: &mut Vec<String>,
+    stage: &str,
+    result: Result<()>,
+) -> Result<Option<String>> {
+    if let Err(error) = result {
+        #[cfg(feature = "tui")]
+        if error.is::<crate::tui::bridge::Cancelled>() {
+            return Err(error);
+        }
+        let message = format!("{stage} failed: {error:#}");
+        failures.push(message.clone());
+        return Ok(Some(message));
+    }
+    Ok(None)
+}
+
+fn report_failure(config: &Config, message: String) {
+    #[cfg(feature = "tui")]
+    if crate::tui::bridge::connected() {
+        crate::tui::bridge::notify(message);
+        return;
+    }
+    print_error(config.color.error, anyhow::anyhow!(message));
 }
 
 fn clean_diff(config: &Config) -> Result<()> {
@@ -67,17 +117,24 @@ fn clean_diff(config: &Config) -> Result<()> {
         )
     })?;
 
+    let mut errors = Vec::new();
     for diff in diffs {
-        let diff = diff?;
-
-        if !diff.file_type()?.is_dir() && diff.path().extension().map(|s| s == "diff") == Some(true)
-        {
-            remove_file(diff.path())
-                .with_context(|| tr!("could not remove '{}'", diff.path().display().to_string()))?;
+        let result = (|| -> Result<()> {
+            let diff = diff?;
+            if !diff.file_type()?.is_dir()
+                && diff.path().extension().map(|s| s == "diff") == Some(true)
+            {
+                remove_file(diff.path()).with_context(|| {
+                    tr!("could not remove '{}'", diff.path().display().to_string())
+                })?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            errors.push(format!("{error:#}"));
         }
     }
-
-    Ok(())
+    finish_entries(errors)
 }
 
 fn clean_aur(
@@ -94,16 +151,28 @@ fn clean_aur(
     let cached_pkgs = read_dir(&config.fetch.clone_dir)
         .with_context(|| tr!("can't open clone dir: {}", config.fetch.clone_dir.display()))?;
 
+    let mut errors = Vec::new();
     for file in cached_pkgs {
-        if let Err(err) =
-            clean_aur_pkg(config, &file?, remove_all, keep_installed, keep_current, rm)
-        {
-            print_error(config.color.error, err);
-            continue;
+        let result = file.map_err(anyhow::Error::from).and_then(|file| {
+            clean_aur_pkg(config, &file, remove_all, keep_installed, keep_current, rm)
+        });
+        if let Err(error) = result {
+            errors.push(format!("{error:#}"));
         }
     }
+    finish_entries(errors)
+}
 
-    Ok(())
+fn finish_entries(errors: Vec<String>) -> Result<()> {
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        bail!(
+            "{} cache entries failed: {}",
+            errors.len(),
+            errors.into_iter().take(3).collect::<Vec<_>>().join("; ")
+        )
+    }
 }
 
 fn fix_perms(file: &Path) -> Result<()> {
@@ -199,4 +268,44 @@ pub fn clean_untracked(config: &Config, path: &Path) -> Result<()> {
     exec::command_output(&mut cmd)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cleanup_records_errors_and_allows_later_stages() {
+        let mut failures = Vec::new();
+        let first = record_failure(
+            &mut failures,
+            "Pacman cache cleanup",
+            Err(anyhow::anyhow!("permission denied")),
+        )
+        .unwrap();
+        assert!(first.unwrap().contains("permission denied"));
+        assert!(record_failure(&mut failures, "AUR clone cleanup", Ok(()))
+            .unwrap()
+            .is_none());
+        let last = record_failure(
+            &mut failures,
+            "Saved diff cleanup",
+            Err(anyhow::anyhow!("read-only directory")),
+        )
+        .unwrap();
+        assert!(last.unwrap().contains("read-only directory"));
+        assert_eq!(failures.len(), 2);
+
+        #[cfg(feature = "tui")]
+        {
+            let cancelled = record_failure(
+                &mut failures,
+                "Pacman cache cleanup",
+                Err(crate::tui::bridge::Cancelled.into()),
+            )
+            .unwrap_err();
+            assert!(cancelled.is::<crate::tui::bridge::Cancelled>());
+            assert_eq!(failures.len(), 2);
+        }
+    }
 }

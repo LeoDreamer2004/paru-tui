@@ -115,6 +115,12 @@ pub fn split_repo_aur_info<'a, T: AsTarg>(
 }
 
 pub fn ask(config: &Config, question: &str, default: bool) -> bool {
+    #[cfg(feature = "tui")]
+    if !config.no_confirm {
+        if let Some(answer) = crate::tui::bridge::confirm(question, default) {
+            return answer;
+        }
+    }
     let action = config.color.action;
     let bold = config.color.bold;
     let yn = if default {
@@ -149,6 +155,12 @@ pub fn ask(config: &Config, question: &str, default: bool) -> bool {
 }
 
 pub fn input(config: &Config, question: &str) -> String {
+    #[cfg(feature = "tui")]
+    if !config.no_confirm {
+        if let Some(answer) = crate::tui::bridge::input(question) {
+            return answer;
+        }
+    }
     let action = config.color.action;
     let bold = config.color.bold;
     println!("{} {}", action.paint("::"), bold.paint(question));
