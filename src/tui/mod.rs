@@ -13,6 +13,7 @@ mod search;
 mod selection;
 mod session;
 pub mod settings;
+mod syntax;
 mod theme;
 pub(crate) mod transaction;
 mod tree;

@@ -1663,7 +1663,7 @@ impl App {
         let right_inner = right.inner(cols[2]);
         self.pkgbuild_comment_inner = right_inner;
         let pkgbuild_lines = if let Some(text) = &view.pkgbuild {
-            review_lines(text)
+            super::syntax::pkgbuild(text)
         } else if let Some(error) = &view.pkgbuild_error {
             vec![Line::from(Span::styled(
                 super::i18n::translate(error, self.settings.language),
@@ -3084,7 +3084,7 @@ impl App {
             let _ = s.pty.resize(size.0, size.1);
         }
         let screen = s.parser.screen();
-        let lines: Vec<Line> = screen.rows(0, inner.width).map(Line::from).collect();
+        let lines = terminal_lines(screen, inner.height, inner.width);
         f.render_widget(Paragraph::new(lines), inner);
         let (row, col) = screen.cursor_position();
         if self.focus == 2
@@ -3099,6 +3099,64 @@ impl App {
         }
     }
 }
+
+fn terminal_lines(screen: &vt100::Screen, height: u16, width: u16) -> Vec<Line<'static>> {
+    (0..height)
+        .map(|row| {
+            let mut spans = Vec::<Span>::new();
+            let mut text = String::new();
+            let mut current = None;
+            for col in 0..width {
+                let Some(cell) = screen.cell(row, col) else {
+                    continue;
+                };
+                if cell.is_wide_continuation() {
+                    continue;
+                }
+                let cell_style = terminal_style(cell);
+                if current.is_some_and(|style| style != cell_style) {
+                    spans.push(Span::styled(std::mem::take(&mut text), current.unwrap()));
+                }
+                current = Some(cell_style);
+                if cell.has_contents() {
+                    text.push_str(&cell.contents());
+                } else {
+                    text.push(' ');
+                }
+            }
+            if let Some(style) = current {
+                spans.push(Span::styled(text, style));
+            }
+            Line::from(spans)
+        })
+        .collect()
+}
+
+fn terminal_style(cell: &vt100::Cell) -> Style {
+    let mut style = Style::default()
+        .fg(terminal_color(cell.fgcolor()))
+        .bg(terminal_color(cell.bgcolor()));
+    for (active, modifier) in [
+        (cell.bold(), Modifier::BOLD),
+        (cell.italic(), Modifier::ITALIC),
+        (cell.underline(), Modifier::UNDERLINED),
+        (cell.inverse(), Modifier::REVERSED),
+    ] {
+        if active {
+            style = style.add_modifier(modifier);
+        }
+    }
+    style
+}
+
+fn terminal_color(color: vt100::Color) -> Color {
+    match color {
+        vt100::Color::Default => Color::Reset,
+        vt100::Color::Idx(index) => Color::Indexed(index),
+        vt100::Color::Rgb(red, green, blue) => Color::Rgb(red, green, blue),
+    }
+}
+
 fn dim_backdrop(f: &mut Frame) {
     for cell in &mut f.buffer_mut().content {
         cell.set_fg(mix(cell.fg, BORDER, 0.70));
@@ -3659,6 +3717,27 @@ pub fn run() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn build_terminal_preserves_ansi_colors_and_attributes() {
+        let mut parser = vt100::Parser::new(2, 40, 0);
+        parser.process(b"plain \x1b[1;31merror\x1b[0m \x1b[38;2;12;34;56mcustom\x1b[0m");
+        let lines = terminal_lines(parser.screen(), 2, 40);
+        let error = lines[0]
+            .spans
+            .iter()
+            .find(|span| span.content.contains("error"))
+            .unwrap();
+        assert_eq!(error.style.fg, Some(Color::Indexed(1)));
+        assert!(error.style.add_modifier.contains(Modifier::BOLD));
+        let custom = lines[0]
+            .spans
+            .iter()
+            .find(|span| span.content.contains("custom"))
+            .unwrap();
+        assert_eq!(custom.style.fg, Some(Color::Rgb(12, 34, 56)));
+    }
+
     #[test]
     fn removal_requires_options_then_command_confirmation_and_can_cancel_both() {
         let mut app = App::new().unwrap();
