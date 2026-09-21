@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+release_tag=${1:?Usage: package-tui TAG [BINARY] [OUTPUT_DIR]}
+release_binary=${2:-target/release/paru-tui}
+release_output=${3:-dist}
+if [[ ! "$release_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+    echo 'Invalid release tag' >&2
+    exit 1
+fi
+test -x "$release_binary"
+release_arch=$(uname -m)
+if [[ "$release_arch" != x86_64 ]]; then
+    echo 'Release packaging currently supports Arch Linux x86_64 only' >&2
+    exit 1
+fi
+release_name="paru-tui-${release_tag}-${release_arch}"
+release_stage=$(mktemp -d)
+trap 'rm -rf -- "$release_stage"' EXIT
+mkdir -p "$release_stage/$release_name/docs" "$release_output"
+install -m755 "$release_binary" "$release_stage/$release_name/paru-tui"
+install -m644 LICENSE README.md "$release_stage/$release_name/"
+install -m644 docs/TUI.md docs/TUI-ARCHITECTURE.md "$release_stage/$release_name/docs/"
+{
+    printf 'Release: %s\nArchitecture: %s\n' "$release_tag" "$release_arch"
+    printf 'Commit: %s\n' "${GITHUB_SHA:-$(git rev-parse HEAD)}"
+    rustc --version
+    pacman -Q pacman glibc openssl
+    printf '\nDynamic libraries:\n'
+    ldd "$release_binary"
+} > "$release_stage/$release_name/BUILD-INFO.txt"
+install -m644 "$release_stage/$release_name/BUILD-INFO.txt" "$release_output/BUILD-INFO.txt"
+tar --zstd -cf "$release_output/$release_name.tar.zst" -C "$release_stage" "$release_name"
+(
+    cd "$release_output"
+    sha256sum "$release_name.tar.zst" BUILD-INFO.txt > SHA256SUMS
+)
