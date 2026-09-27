@@ -36,7 +36,7 @@ jobs:
 
       - name: Install build dependencies
         # Raster tests also require fc-match and an installed monospace font.
-        run: pacman -Syu --noconfirm --needed rust clang git openssl pkgconf zstd fontconfig ttf-dejavu
+        run: pacman -Syu --noconfirm --needed rust clang git openssl pkgconf zstd fontconfig ttf-dejavu python
 
       - uses: actions/checkout@v4
         with:
@@ -53,6 +53,9 @@ jobs:
 
       - name: Smoke test
         run: target/release/paru-tui --help
+
+      - name: Verify transaction hooks in a disposable root
+        run: python3 tests/tui_hooks.py target/release/paru-tui
 
       - name: Package binary and checksums
         run: bash scripts/package-tui "$RELEASE_TAG"

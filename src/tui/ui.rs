@@ -148,6 +148,23 @@ impl Toast {
         }
     }
     fn backend(message: String) -> Option<Self> {
+        // libalpm logs each failed mirror before trying the next one. Keep
+        // these notices in activity/diagnostics, but only toast the eventual
+        // download/transaction failure if all mirrors have been exhausted.
+        let mirror_attempt = ["LogLevel(ERROR): ", "LogLevel(WARNING): "]
+            .iter()
+            .find_map(|prefix| message.strip_prefix(prefix))
+            .is_some_and(|text| {
+                text.starts_with("failed retrieving file '")
+                    || ((text.starts_with("too many errors from ")
+                        || text.starts_with("fatal error from "))
+                        && text
+                            .trim_end()
+                            .ends_with(", skipping for the remainder of this transaction"))
+            });
+        if mirror_attempt {
+            return None;
+        }
         let toast = Self::new(message);
         (toast.error && toast.message.trim() != "Error:").then_some(toast)
     }
@@ -4639,6 +4656,37 @@ mod tests {
                 .error
         );
         assert!(Toast::backend("Download failed".into()).unwrap().error);
+    }
+    #[test]
+    fn mirror_attempts_stay_quiet_but_final_failures_are_visible() {
+        let attempt = format!(
+            "{:?}: failed retrieving file 'linux.pkg.tar.zst' from mirror.example : The requested URL returned error: 404",
+            alpm::LogLevel::ERROR
+        );
+        assert!(Toast::backend(attempt.clone()).is_none());
+        for reason in ["too many errors", "fatal error"] {
+            let message = format!(
+                "{:?}: {reason} from mirror.example, skipping for the remainder of this transaction",
+                alpm::LogLevel::WARNING
+            );
+            assert!(Toast::backend(message).is_none());
+        }
+        for message in [
+            format!("{:?}: failed to retrieve some files", alpm::LogLevel::ERROR),
+            format!(
+                "{:?}: failed to create temporary file for download",
+                alpm::LogLevel::ERROR
+            ),
+            format!(
+                "{:?}: invalid or corrupted package (PGP signature)",
+                alpm::LogLevel::ERROR
+            ),
+            "Transaction failed: Commit failed: Retrieve".into(),
+            format!("Transaction failed: {attempt}"),
+            format!("Operation failed with exit code 1\n{attempt}"),
+        ] {
+            assert!(Toast::backend(message).unwrap().error);
+        }
     }
     #[test]
     fn localized_dialogs_keep_shell_and_build_content_intact() {

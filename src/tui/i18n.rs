@@ -26,6 +26,10 @@ pub fn translate(text: &str, language: Language) -> String {
         ("Cannot open comment link: ", "无法打开评论链接："),
         ("Error: ", "错误："),
         ("Transaction failed: ", "事务失败："),
+        (
+            "Post-transaction hooks failed; packages have already been changed: ",
+            "事务后置钩子失败；软件包已变更，请检查并修复钩子错误：",
+        ),
         ("Cannot start: ", "无法启动："),
         ("Proxy not saved: ", "代理未保存："),
         ("Cache directory: ", "缓存目录："),

@@ -13,7 +13,7 @@ use std::{
     process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     },
 };
 
@@ -24,6 +24,13 @@ pub struct Request {
     pub options: Vec<(String, Option<String>)>,
     pub targets: Vec<String>,
     pub assume_installed: Vec<String>,
+}
+
+#[derive(Default)]
+struct HookErrors {
+    post_transaction: bool,
+    current_hook: String,
+    messages: Vec<String>,
 }
 
 pub fn execute<S: AsRef<str> + Display + Debug>(config: &Config, args: &Args<S>) -> Result<Status> {
@@ -210,6 +217,26 @@ pub fn run_file(path: &str) -> Result<()> {
     }
     result
 }
+
+fn transaction_handle(configuration: &pacmanconf::Config) -> Result<alpm::Alpm> {
+    let mut handle = alpm::Alpm::new(
+        configuration.root_dir.as_str(),
+        configuration.db_path.as_str(),
+    )?;
+    // configure_alpm replaces hookdirs; pacman.conf lists only the additional
+    // directories, not libalpm's built-in (root-relative) system hook directory.
+    // Preserve that directory first so custom hooks can still override it.
+    let mut configuration = configuration.clone();
+    configuration.hook_dir = handle
+        .hookdirs()
+        .iter()
+        .map(str::to_owned)
+        .chain(configuration.hook_dir)
+        .collect();
+    alpm_utils::configure_alpm(&mut handle, &configuration)?;
+    Ok(handle)
+}
+
 fn run(request: &Request) -> Result<()> {
     validate(request)?;
     let mut configuration: pacmanconf::Config = request.configuration.parse()?;
@@ -230,11 +257,7 @@ fn run(request: &Request) -> Result<()> {
             configuration.disable_download_timeout = true;
         }
     }
-    let mut handle = alpm::Alpm::new(
-        configuration.root_dir.as_str(),
-        configuration.db_path.as_str(),
-    )?;
-    alpm_utils::configure_alpm(&mut handle, &configuration)?;
+    let mut handle = transaction_handle(&configuration)?;
     let cancelled = Arc::new(AtomicBool::new(false));
     let registrations: Vec<_> = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP]
         .into_iter()
@@ -292,15 +315,38 @@ fn run(request: &Request) -> Result<()> {
             bridge::download(message);
         },
     );
-    handle.set_log_cb((), |level, text, _| {
+    // PostTransaction hook failures do not necessarily make trans_commit fail.
+    // Keep these errors separate from recoverable download/mirror errors.
+    let hook_errors = Arc::new(Mutex::new(HookErrors::default()));
+    handle.set_log_cb(hook_errors.clone(), |level, text, state| {
+        if level.intersects(alpm::LogLevel::ERROR) && !text.trim().is_empty() {
+            let mut state = state.lock().unwrap();
+            if state.post_transaction {
+                let message = format!("{}: {}", state.current_hook, text.trim());
+                state.messages.push(message);
+            }
+        }
         if level.intersects(alpm::LogLevel::ERROR | alpm::LogLevel::WARNING)
             && !text.trim().is_empty()
         {
             bridge::notify(format!("{level:?}: {}", text.trim()));
         }
     });
-    handle.set_event_cb((), |event, _| {
-        bridge::notify(format!("{:?}", event.event()))
+    handle.set_event_cb(hook_errors.clone(), |event, state| {
+        let event = event.event();
+        match &event {
+            alpm::Event::HookStart(hook) => {
+                let mut state = state.lock().unwrap();
+                state.post_transaction = hook.when() == alpm::HookWhen::PostTransaction;
+                state.current_hook.clear();
+            }
+            alpm::Event::HookRunStart(hook) => {
+                state.lock().unwrap().current_hook = hook.name().to_owned();
+            }
+            alpm::Event::HookDone(_) => state.lock().unwrap().post_transaction = false,
+            _ => {}
+        }
+        bridge::notify(format!("{event:?}"))
     });
     for dep in &request.assume_installed {
         handle.add_assume_installed(&alpm::Depend::new(dep.as_str()))?;
@@ -485,6 +531,13 @@ fn run(request: &Request) -> Result<()> {
         handle
             .trans_commit()
             .map_err(|e| anyhow::anyhow!("Commit failed: {e:?}"))?;
+        let errors = &hook_errors.lock().unwrap().messages;
+        if !errors.is_empty() {
+            bail!(
+                "Post-transaction hooks failed; packages have already been changed: {}",
+                errors.join("; ")
+            );
+        }
         bridge::notify("Transaction completed".into());
         Ok(())
     })();
@@ -611,6 +664,34 @@ fn question(mut raw: alpm::AnyQuestion, cancelled: &mut Arc<AtomicBool>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn transaction_preserves_system_hooks_before_custom_overrides() {
+        let root = tempfile::tempdir().unwrap();
+        let db = root.path().join("db");
+        std::fs::create_dir(&db).unwrap();
+        let system = root.path().join("usr/share/libalpm/hooks");
+        let custom = root.path().join("custom-hooks");
+        let cli = root.path().join("cli-hooks");
+        let mut config: pacmanconf::Config = format!(
+            "[options]\nRootDir = {}\nDBPath = {}\nLogFile = {}/pacman.log\n",
+            root.path().display(),
+            db.display(),
+            root.path().display()
+        )
+        .parse()
+        .unwrap();
+        for additional in [vec![], vec![custom, cli]] {
+            config.hook_dir = additional.iter().map(|p| p.display().to_string()).collect();
+            let restored: pacmanconf::Config = snapshot(&config).unwrap().parse().unwrap();
+            let handle = transaction_handle(&restored).unwrap();
+            let expected: Vec<_> = std::iter::once(system.as_path())
+                .chain(additional.iter().map(|p| p.as_path()))
+                .collect();
+            let actual: Vec<_> = handle.hookdirs().iter().map(std::path::Path::new).collect();
+            assert_eq!(actual, expected);
+        }
+    }
+
     #[test]
     fn configuration_snapshot_preserves_trust_and_repository_policy() {
         let config: pacmanconf::Config = "[options]\nRootDir = /tmp/root\nDBPath = /tmp/db\nArchitecture = x86_64\nSigLevel = Required DatabaseOptional\nLocalFileSigLevel = Optional\nHoldPkg = pacman\nIgnorePkg = example\nNoExtract = usr/share/doc/*\nCheckSpace\nParallelDownloads = 4\n[core]\nServer = https://example.invalid/core\nSigLevel = Required\nUsage = Sync Search Install Upgrade\n".parse().unwrap();

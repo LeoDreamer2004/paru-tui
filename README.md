@@ -3,6 +3,7 @@
 ## Paru TUI fork
 
 ![List demo](./fig/list.png)
+![Update demo](./fig/updates.png)
 
 Native Rust terminal interface with separate repository/AUR update panels, package search, and per-package-base proxy settings. The original CLI remains available.
 
