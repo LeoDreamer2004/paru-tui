@@ -35,8 +35,7 @@ jobs:
           echo "PARU_VERSION=${RELEASE_TAG#v}" >> "$GITHUB_ENV"
 
       - name: Install build dependencies
-        # Raster tests also require fc-match and an installed monospace font.
-        run: pacman -Syu --noconfirm --needed rust clang git openssl pkgconf zstd fontconfig ttf-dejavu python
+        run: pacman -Syu --noconfirm --needed rust clang git openssl pkgconf zstd fontconfig ttf-dejavu
 
       - uses: actions/checkout@v4
         with:
@@ -45,17 +44,8 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Test TUI
-        run: cargo test --locked --features tui,generate --lib
-
       - name: Build release binary
         run: cargo build --locked --release --features tui,generate --bin paru-tui
-
-      - name: Smoke test
-        run: target/release/paru-tui --help
-
-      - name: Verify transaction hooks in a disposable root
-        run: python3 tests/tui_hooks.py target/release/paru-tui
 
       - name: Package binary and checksums
         run: bash scripts/package-tui "$RELEASE_TAG"

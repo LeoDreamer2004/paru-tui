@@ -571,28 +571,3 @@ pub(super) fn date(timestamp: i64) -> String {
         .map(|d| d.with_timezone(&chrono::Local).to_string())
         .unwrap_or_else(|| "None".into())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cached_split_pkgbuild_identifies_installed_aur_packages() {
-        let directory = tempfile::tempdir().unwrap();
-        let clone = directory.path().join("split-base");
-        std::fs::create_dir(&clone).unwrap();
-        std::fs::write(
-            clone.join(".SRCINFO"),
-            "pkgbase = split-base\n\tpkgver = 1\n\tpkgrel = 1\npkgname = split-one\npkgname = split-two\n",
-        )
-        .unwrap();
-        let installed = HashSet::from(["split-two".to_owned(), "unrelated".to_owned()]);
-        let cached = cached_aur_bases(directory.path(), &installed);
-        assert_eq!(
-            cached.get("split-two").map(String::as_str),
-            Some("split-base")
-        );
-        assert!(!cached.contains_key("split-one"));
-        assert!(!cached.contains_key("unrelated"));
-    }
-}

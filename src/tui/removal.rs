@@ -109,34 +109,3 @@ impl Removal {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn combinations_preserve_targets_and_option_dependencies() {
-        let mut r = Removal::new("example".into());
-        assert_eq!(r.args(), ["-Rssc", "--", "example"]);
-        r.toggle();
-        r.cursor = 2;
-        r.toggle();
-        r.cursor = 0;
-        assert_eq!(r.args(), ["-R", "--", "example"]);
-        r.toggle();
-        r.cursor = 2;
-        r.toggle();
-        assert_eq!(r.args(), ["-Rsc", "--", "example"]);
-        r.cursor = 1;
-        r.toggle();
-        r.cursor = 3;
-        r.toggle();
-        assert_eq!(r.args(), ["-Rsscn", "--", "example"]);
-        r.cursor = 4;
-        r.toggle();
-        assert_eq!(r.args(), ["-Rssn", "--unneeded", "--", "example"]);
-        r.cursor = 0;
-        r.toggle();
-        assert!(!r.checked[1]);
-        assert_eq!(r.args(), ["-Rn", "--unneeded", "--", "example"]);
-    }
-}

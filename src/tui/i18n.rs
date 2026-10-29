@@ -303,6 +303,7 @@ pub fn translate(text: &str, language: Language) -> String {
         ("Select a package to inspect.", "选择软件包查看详情。"),
         ("Loading package details…", "正在读取软件包详情…"),
         ("No matching packages", "没有匹配的软件包"),
+        ("No packages to update", "没有要更新的软件包"),
         ("Scanning…", "正在扫描…"),
         ("not configured", "尚未配置"),
         (

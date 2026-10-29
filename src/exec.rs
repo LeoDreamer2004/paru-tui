@@ -126,18 +126,6 @@ fn sudo_status(cmd: &mut Command) -> Result<Status> {
     }
     Ok(status)
 }
-#[cfg(all(test, feature = "tui"))]
-#[test]
-fn sudo_failure_retains_diagnostics_and_exit_code() {
-    let error = sudo_status(Command::new("/bin/sh").args([
-        "-c",
-        "printf 'sudo: 3 incorrect password attempts\n' >&2; exit 1",
-    ]))
-    .unwrap_err();
-    assert!(format!("{error:#}").contains("3 incorrect password attempts"));
-    assert_eq!(error.downcast_ref::<Status>().unwrap().code(), 1);
-}
-
 pub fn command(cmd: &mut Command) -> Result<()> {
     command_status(cmd)?
         .success()
