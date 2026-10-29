@@ -1,13 +1,13 @@
 use super::{
     catalog::{Catalog, Event},
-    settings::{configure_git, Settings},
+    settings::{Settings, configure_git},
 };
 use crate::{
     config::Config,
-    devel::{read_devel_info, remote_commit, RepoInfo},
+    devel::{RepoInfo, read_devel_info, remote_commit},
 };
 use anyhow::{Context, Result};
-use futures::{stream, StreamExt};
+use futures::{StreamExt, stream};
 use std::{collections::HashSet, sync::mpsc::Sender, time::Duration};
 
 async fn changed(
@@ -176,11 +176,13 @@ esac
             .map(|p| p.name.as_str())
             .collect();
         assert_eq!(updates, ["numpy-latest", "numpy-tools"].into());
-        assert!(catalog
-            .installed
-            .iter()
-            .filter(|p| p.devel)
-            .all(|p| p.next.as_deref() == Some("latest-commit")));
+        assert!(
+            catalog
+                .installed
+                .iter()
+                .filter(|p| p.devel)
+                .all(|p| p.next.as_deref() == Some("latest-commit"))
+        );
         let errors: Vec<_> = rx
             .try_iter()
             .filter_map(|e| {

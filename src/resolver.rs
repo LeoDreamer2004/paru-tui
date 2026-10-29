@@ -1,9 +1,9 @@
+use crate::RaurHandle;
 use crate::config::{Alpm, Config, LocalRepos, YesNoAll, YesNoAllTree};
 use crate::fmt::color_repo;
-use crate::util::{get_provider, NumberMenu};
-use crate::RaurHandle;
+use crate::util::{NumberMenu, get_provider};
 
-use std::io::{stdin, stdout, BufRead, Write};
+use std::io::{Write, stdout};
 
 use aur_depends::{Flags, PkgbuildRepo, Resolver};
 use raur::Cache;
@@ -108,9 +108,13 @@ pub fn resolver<'a, 'b>(
             );
 
             let mut repo = String::new();
+            let mut n = 1;
 
             for group in groups {
                 if group.db.name() != repo {
+                    if !repo.is_empty() {
+                        println!();
+                    }
                     repo = group.db.name().to_string();
                     println!(
                         "{} {} {}",
@@ -121,24 +125,22 @@ pub fn resolver<'a, 'b>(
                     print!("    ");
                 }
 
-                for (n, pkg) in (1..).zip(group.group.packages()) {
+                for pkg in group.group.packages() {
                     print!("{}) {}  ", n, pkg.name());
+                    n += 1;
                 }
             }
 
             print!("{}", tr!("\n\nEnter a selection (default=all): "));
             let _ = stdout().lock().flush();
 
-            let stdin = stdin();
-            let mut stdin = stdin.lock();
             let mut input = String::new();
-
-            input.clear();
             if !no_confirm {
-                let _ = stdin.read_line(&mut input);
+                crate::util::read_line_or_exit(&mut input);
             }
 
             let menu = NumberMenu::new(input.trim());
+
             for (n, pkg) in (1..).zip(groups.iter().flat_map(|g| g.group.packages())) {
                 if menu.contains(n, "") {
                     pkgs.push(pkg);

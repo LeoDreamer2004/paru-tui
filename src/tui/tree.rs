@@ -135,11 +135,7 @@ impl Row {
         }
         for (i, &more) in self.branches.iter().enumerate().skip(skip) {
             prefix.push_str(if i + 1 == self.branches.len() {
-                if more {
-                    "├─"
-                } else {
-                    "└─"
-                }
+                if more { "├─" } else { "└─" }
             } else if more {
                 "│ "
             } else {

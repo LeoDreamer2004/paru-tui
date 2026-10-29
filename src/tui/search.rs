@@ -5,8 +5,9 @@ use raur::Raur;
 use scraper::{ElementRef, Html, Selector};
 use std::collections::HashSet;
 use std::sync::{
+    Arc,
     atomic::{AtomicU64, Ordering},
-    mpsc, Arc,
+    mpsc,
 };
 use std::time::Duration;
 
@@ -31,15 +32,15 @@ impl Search {
                 let result = tokio::runtime::Runtime::new()
                     .map_err(anyhow::Error::from)
                     .and_then(|rt| rt.block_on(run(id, &query, &events, &generation)));
-                if generation.load(Ordering::Relaxed) == id {
-                    if let Err(e) = result {
-                        let _ = events.send(Event::Search {
-                            id,
-                            packages: vec![],
-                            done: true,
-                            error: Some(format!("Search failed: {e:#}")),
-                        });
-                    }
+                if generation.load(Ordering::Relaxed) == id
+                    && let Err(e) = result
+                {
+                    let _ = events.send(Event::Search {
+                        id,
+                        packages: vec![],
+                        done: true,
+                        error: Some(format!("Search failed: {e:#}")),
+                    });
                 }
             }
         });
@@ -93,7 +94,7 @@ async fn run(
         match tokio::time::timeout(Duration::from_millis(75), &mut search).await {
             Ok(result) => break result,
             Err(_) if std::time::Instant::now() >= deadline => {
-                break Err(anyhow::anyhow!("AUR search timed out"))
+                break Err(anyhow::anyhow!("AUR search timed out"));
             }
             Err(_) => {}
         }
@@ -130,7 +131,11 @@ pub fn inspect_aur(name: String, key: String, sender: mpsc::Sender<Event>) {
                     let config = catalog::config()?;
                     let mut packages = tokio::time::timeout(
                         Duration::from_secs(15),
-                        config.raur.info(&[name.as_str()]),
+                        config
+                            .raur
+                            .as_ref()
+                            .expect("AUR client initialized")
+                            .info(&[name.as_str()]),
                     )
                     .await??;
                     let package = packages
@@ -158,7 +163,11 @@ pub fn view_pkgbuild(id: u64, name: String, base: Option<String>, sender: mpsc::
                     let mut packages = runtime.block_on(async {
                         let packages = tokio::time::timeout(
                             Duration::from_secs(15),
-                            config.raur.info(&[name.as_str()]),
+                            config
+                                .raur
+                                .as_ref()
+                                .expect("AUR client initialized")
+                                .info(&[name.as_str()]),
                         )
                         .await
                         .context("AUR lookup timed out")??;
@@ -213,15 +222,15 @@ pub fn view_comments(
         let result = tokio::runtime::Runtime::new()
             .map_err(anyhow::Error::from)
             .and_then(|rt| rt.block_on(load_comments(id, &base, &sender, &generation)));
-        if let Err(e) = result {
-            if generation.load(Ordering::Relaxed) == id {
-                let _ = sender.send(Event::Comments {
-                    id,
-                    comments: vec![],
-                    done: true,
-                    error: Some(format!("AUR comments failed: {e:#}")),
-                });
-            }
+        if let Err(e) = result
+            && generation.load(Ordering::Relaxed) == id
+        {
+            let _ = sender.send(Event::Comments {
+                id,
+                comments: vec![],
+                done: true,
+                error: Some(format!("AUR comments failed: {e:#}")),
+            });
         }
     });
 }
@@ -233,7 +242,11 @@ async fn load_comments(
     generation: &AtomicU64,
 ) -> Result<()> {
     let config = catalog::config()?;
-    let client = config.raur.client();
+    let client = config
+        .raur
+        .as_ref()
+        .expect("AUR client initialized")
+        .client();
     let mut url = config.aur_url.join(&format!("packages/{base}"))?;
     let mut offset = 0usize;
     let mut seen = HashSet::new();
@@ -554,28 +567,36 @@ mod tests {
         assert_eq!(comments.len(), 2);
         assert!(comments[0].pinned);
         assert_eq!(comments[0].id, "comment-1");
-        assert!(comments[1]
-            .lines
-            .iter()
-            .any(|line| line.code && line.text() == "makepkg -si"));
-        assert!(comments[1]
-            .lines
-            .iter()
-            .any(|line| line.code && line.text() == "  --noconfirm"));
-        assert!(comments[1]
-            .lines
-            .iter()
-            .flat_map(|line| &line.spans)
-            .any(|span| {
-                span.text == "guide" && span.url.as_deref() == Some("https://example.org/guide")
-            }));
-        assert!(comments[1]
-            .lines
-            .iter()
-            .flat_map(|line| &line.spans)
-            .any(|span| {
-                span.text == "https://example.org/archive"
-                    && span.url.as_deref() == Some("https://example.org/archive")
-            }));
+        assert!(
+            comments[1]
+                .lines
+                .iter()
+                .any(|line| line.code && line.text() == "makepkg -si")
+        );
+        assert!(
+            comments[1]
+                .lines
+                .iter()
+                .any(|line| line.code && line.text() == "  --noconfirm")
+        );
+        assert!(
+            comments[1]
+                .lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .any(|span| {
+                    span.text == "guide" && span.url.as_deref() == Some("https://example.org/guide")
+                })
+        );
+        assert!(
+            comments[1]
+                .lines
+                .iter()
+                .flat_map(|line| &line.spans)
+                .any(|span| {
+                    span.text == "https://example.org/archive"
+                        && span.url.as_deref() == Some("https://example.org/archive")
+                })
+        );
     }
 }

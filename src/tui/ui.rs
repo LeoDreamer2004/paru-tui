@@ -1,6 +1,6 @@
 use super::theme::{
-    accent, mix, selection, BLUE, BORDER, GREEN, MUTED as DIM, RED, SURFACE as COMMAND_BG, TEXT,
-    YELLOW,
+    BLUE, BORDER, GREEN, MUTED as DIM, RED, SURFACE as COMMAND_BG, TEXT, YELLOW, accent, mix,
+    selection,
 };
 use super::{
     bridge::Question,
@@ -17,24 +17,25 @@ use crossterm::{
         MouseEventKind,
     },
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Widget, Wrap},
-    Frame, Terminal,
 };
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet, VecDeque},
     io::{self, IsTerminal},
     sync::{
+        Arc,
         atomic::{AtomicU64, Ordering},
-        mpsc, Arc,
+        mpsc,
     },
     time::{Duration, Instant},
 };
@@ -52,20 +53,12 @@ fn package_badges(package: &Package, language: Language) -> String {
     format!(
         "{}{}",
         if remote.out_of_date.is_some() {
-            if zh {
-                "[旧]"
-            } else {
-                "[old]"
-            }
+            if zh { "[旧]" } else { "[old]" }
         } else {
             ""
         },
         if remote.orphaned {
-            if zh {
-                "[孤]"
-            } else {
-                "[orphan]"
-            }
+            if zh { "[孤]" } else { "[orphan]" }
         } else {
             ""
         },
@@ -169,11 +162,7 @@ impl Toast {
         (toast.error && toast.message.trim() != "Error:").then_some(toast)
     }
     fn lifetime(&self) -> f32 {
-        if self.error {
-            8.0
-        } else {
-            4.0
-        }
+        if self.error { 8.0 } else { 4.0 }
     }
     fn expansion(&self) -> f32 {
         let elapsed = self.since.elapsed().as_secs_f32();
@@ -509,10 +498,10 @@ impl App {
                 }
                 Event::Loaded(mut catalog) => {
                     for package in &mut catalog.installed {
-                        if package.source == "foreign" {
-                            if let Some(base) = self.confirmed_aur.get(&package.name) {
-                                catalog::mark_aur(package, base);
-                            }
+                        if package.source == "foreign"
+                            && let Some(base) = self.confirmed_aur.get(&package.name)
+                        {
+                            catalog::mark_aur(package, base);
                         }
                     }
                     self.loading = !catalog.aur_loaded;
@@ -610,18 +599,17 @@ impl App {
             && !self.searching
             && self.detail_pending.is_none()
             && self.last_navigation.elapsed() > Duration::from_millis(250)
+            && let Some(p) = self.current()
         {
-            if let Some(p) = self.current() {
-                let key = self.inspection_key(p);
-                let name = p.name.clone();
-                let aur = self.page == 4 && p.is_aur();
-                if (self.page == 1 || aur) && self.detail_requested.insert(key.clone()) {
-                    self.detail_pending = Some(key.clone());
-                    if aur {
-                        super::search::inspect_aur(name, key, self.tx.clone());
-                    } else {
-                        catalog::inspect(name, true, key, self.tx.clone());
-                    }
+            let key = self.inspection_key(p);
+            let name = p.name.clone();
+            let aur = self.page == 4 && p.is_aur();
+            if (self.page == 1 || aur) && self.detail_requested.insert(key.clone()) {
+                self.detail_pending = Some(key.clone());
+                if aur {
+                    super::search::inspect_aur(name, key, self.tx.clone());
+                } else {
+                    catalog::inspect(name, true, key, self.tx.clone());
                 }
             }
         }
@@ -660,29 +648,28 @@ impl App {
                     });
                 }
             }
-            if let Some(code) = session.code {
-                if !self.reported
-                    && session
-                        .finished_at
-                        .is_some_and(|t| t.elapsed() >= Duration::from_millis(150))
-                {
-                    self.reported = true;
-                    self.dialog = None;
-                    let outcome = if code == 0 {
-                        "Operation completed".into()
-                    } else {
-                        format!(
-                            "Operation failed with exit code {code}{}",
-                            session
-                                .last_error
-                                .as_ref()
-                                .map(|reason| format!("\n{reason}"))
-                                .unwrap_or_default()
-                        )
-                    };
-                    self.note(outcome);
-                    self.refresh();
-                }
+            if let Some(code) = session.code
+                && !self.reported
+                && session
+                    .finished_at
+                    .is_some_and(|t| t.elapsed() >= Duration::from_millis(150))
+            {
+                self.reported = true;
+                self.dialog = None;
+                let outcome = if code == 0 {
+                    "Operation completed".into()
+                } else {
+                    format!(
+                        "Operation failed with exit code {code}{}",
+                        session
+                            .last_error
+                            .as_ref()
+                            .map(|reason| format!("\n{reason}"))
+                            .unwrap_or_default()
+                    )
+                };
+                self.note(outcome);
+                self.refresh();
             }
         }
         Ok(())
@@ -705,10 +692,17 @@ impl App {
         }
         args.push("--noupgrademenu".into());
         self.dialog = Some(Dialog {
-            scroll: 0, title: title.into(),
-            body: format!("{} repository candidates  {} AUR candidates\n\nUpdate the selected source? The final transaction plan will be shown before installation.",
-                self.updates[0].len(), self.updates[1].len()),
-            question: None, action: Some(args), yes: true, input: String::new(),
+            scroll: 0,
+            title: title.into(),
+            body: format!(
+                "{} repository candidates  {} AUR candidates\n\nUpdate the selected source? The final transaction plan will be shown before installation.",
+                self.updates[0].len(),
+                self.updates[1].len()
+            ),
+            question: None,
+            action: Some(args),
+            yes: true,
+            input: String::new(),
         });
     }
     fn update_one(&mut self) {
@@ -729,10 +723,17 @@ impl App {
         }
         args.extend(["--".into(), p.name.clone()]);
         self.dialog = Some(Dialog {
-            title: "UPDATE AUR PACKAGE".into(), scroll: 0,
-            body: format!("Update {} to {}?\n\nOnly this AUR target and its required dependencies will be processed. Other AUR packages are not selected.", p.name, p.next.as_deref().unwrap_or(&p.version)),
-            question: None, action: Some(args),
-            yes: true, input: String::new(),
+            title: "UPDATE AUR PACKAGE".into(),
+            scroll: 0,
+            body: format!(
+                "Update {} to {}?\n\nOnly this AUR target and its required dependencies will be processed. Other AUR packages are not selected.",
+                p.name,
+                p.next.as_deref().unwrap_or(&p.version)
+            ),
+            question: None,
+            action: Some(args),
+            yes: true,
+            input: String::new(),
         });
     }
     fn remove(&mut self) {
@@ -761,10 +762,24 @@ impl App {
                     .collect::<Vec<_>>()
                     .join("\n");
                 self.dialog = Some(Dialog {
-                    title: "REMOVE PACKAGE".into(), scroll: 0,
-                    body: format!("Remove {}?\n\n{}\n\nThe final removal plan will be shown before any packages are removed.", removal.package,
-                        if descriptions.is_empty() { super::i18n::translate("Remove only the selected package.", self.settings.language) } else { descriptions }),
-                    action: Some(removal.args()), question: None, yes: true, input: String::new(),
+                    title: "REMOVE PACKAGE".into(),
+                    scroll: 0,
+                    body: format!(
+                        "Remove {}?\n\n{}\n\nThe final removal plan will be shown before any packages are removed.",
+                        removal.package,
+                        if descriptions.is_empty() {
+                            super::i18n::translate(
+                                "Remove only the selected package.",
+                                self.settings.language,
+                            )
+                        } else {
+                            descriptions
+                        }
+                    ),
+                    action: Some(removal.args()),
+                    question: None,
+                    yes: true,
+                    input: String::new(),
                 });
             }
             _ => {}
@@ -782,7 +797,18 @@ impl App {
                 .and_then(|r| r.target.clone())
                 .unwrap_or_else(|| format!("{}/{}", p.source, p.name));
             let args = vec!["-S".into(), "--".into(), target];
-            self.dialog=Some(Dialog{scroll:0,title:"INSTALL PACKAGE".into(),body:format!("Install {} {} from {}?\n\nDependencies and the final plan are checked by paru.",p.name,p.version,p.source),question:None,action:Some(args),yes:true,input:String::new()});
+            self.dialog = Some(Dialog {
+                scroll: 0,
+                title: "INSTALL PACKAGE".into(),
+                body: format!(
+                    "Install {} {} from {}?\n\nDependencies and the final plan are checked by paru.",
+                    p.name, p.version, p.source
+                ),
+                question: None,
+                action: Some(args),
+                yes: true,
+                input: String::new(),
+            });
         }
     }
     fn toggle_proxy(&mut self) {
@@ -966,10 +992,10 @@ impl App {
         }
         match key.code {
             KeyCode::Esc => {
-                if dialog.question.is_some() {
-                    if let Some(s) = &mut self.session {
-                        s.answer(String::new(), true)?;
-                    }
+                if dialog.question.is_some()
+                    && let Some(s) = &mut self.session
+                {
+                    s.answer(String::new(), true)?;
                 }
                 self.dialog = None;
             }
@@ -1041,13 +1067,14 @@ impl App {
             self.activity_scroll = self.activity_scroll.saturating_add_signed(delta);
         } else if matches!(self.page, 0 | 1 | 4) && self.focus == 1 {
             self.detail_scroll = self.detail_scroll.saturating_add_signed(delta);
-        } else if matches!(self.page, 0 | 4) && self.focus == 2 {
-            if let Some(session) = &mut self.session {
-                let offset = session.parser.screen().scrollback();
-                session
-                    .parser
-                    .set_scrollback(offset.saturating_add_signed((-delta).into()));
-            }
+        } else if matches!(self.page, 0 | 4)
+            && self.focus == 2
+            && let Some(session) = &mut self.session
+        {
+            let offset = session.parser.screen().scrollback();
+            session
+                .parser
+                .set_scrollback(offset.saturating_add_signed((-delta).into()));
         }
     }
     fn key(&mut self, key: KeyEvent) -> Result<bool> {
@@ -1168,11 +1195,11 @@ impl App {
                 KeyCode::Down => self.detail_scroll = self.detail_scroll.saturating_add(1),
                 KeyCode::Up => self.detail_scroll = self.detail_scroll.saturating_sub(1),
                 KeyCode::Char('c') => {
-                    if let Some(s) = &mut self.session {
-                        if s.code.is_none() {
-                            s.pty.send(b"\x03")?;
-                            return Ok(false);
-                        }
+                    if let Some(s) = &mut self.session
+                        && s.code.is_none()
+                    {
+                        s.pty.send(b"\x03")?;
+                        return Ok(false);
                     }
                     return Ok(true);
                 }
@@ -1262,11 +1289,11 @@ impl App {
             ) {
                 return Ok(false);
             }
-        } else if self.page == 3 {
-            if let Some(delta) = delta {
-                self.activity_scroll = self.activity_scroll.saturating_add_signed(delta as i16);
-                return Ok(false);
-            }
+        } else if self.page == 3
+            && let Some(delta) = delta
+        {
+            self.activity_scroll = self.activity_scroll.saturating_add_signed(delta as i16);
+            return Ok(false);
         }
         match key.code {
             KeyCode::Char('?') => {
@@ -2115,11 +2142,7 @@ impl App {
             },
             fit_text(
                 if updates {
-                    if zh {
-                        "新版本"
-                    } else {
-                        "NEW"
-                    }
+                    if zh { "新版本" } else { "NEW" }
                 } else if zh {
                     "版本"
                 } else {
@@ -2329,43 +2352,43 @@ impl App {
         let block = self.content_panel(" INSPECTOR ".into(), self.focus == 1);
         let mut inner = block.inner(area);
         f.render_widget(block, area);
-        if self.page == 4 {
-            if let Some(remote) = self.current().and_then(|p| p.remote.as_ref()) {
-                let mut warnings = Vec::new();
-                let zh = self.settings.language == Language::ZhCn;
-                if remote.orphaned {
-                    warnings.push(if zh {
-                        "无人维护（孤儿包）"
-                    } else {
-                        "Unmaintained (orphaned)"
-                    });
-                }
-                if remote.out_of_date.is_some() {
-                    warnings.push(if zh {
-                        "已标记过期"
-                    } else {
-                        "Flagged out-of-date"
-                    });
-                }
-                if !warnings.is_empty() {
-                    let warning = Paragraph::new(warnings.join("\n"))
-                        .style(style(RED))
-                        .wrap(Wrap { trim: false });
-                    let height = (warning.line_count(inner.width.saturating_sub(4)) as u16 + 2)
-                        .min(inner.height.saturating_sub(1));
-                    f.render_widget(
-                        warning.block(
-                            Block::default()
-                                .borders(Borders::ALL)
-                                .border_type(BorderType::Rounded)
-                                .border_style(style(RED))
-                                .padding(Padding::horizontal(1)),
-                        ),
-                        Rect::new(inner.x, inner.y, inner.width, height),
-                    );
-                    inner.y += height;
-                    inner.height = inner.height.saturating_sub(height);
-                }
+        if self.page == 4
+            && let Some(remote) = self.current().and_then(|p| p.remote.as_ref())
+        {
+            let mut warnings = Vec::new();
+            let zh = self.settings.language == Language::ZhCn;
+            if remote.orphaned {
+                warnings.push(if zh {
+                    "无人维护（孤儿包）"
+                } else {
+                    "Unmaintained (orphaned)"
+                });
+            }
+            if remote.out_of_date.is_some() {
+                warnings.push(if zh {
+                    "已标记过期"
+                } else {
+                    "Flagged out-of-date"
+                });
+            }
+            if !warnings.is_empty() {
+                let warning = Paragraph::new(warnings.join("\n"))
+                    .style(style(RED))
+                    .wrap(Wrap { trim: false });
+                let height = (warning.line_count(inner.width.saturating_sub(4)) as u16 + 2)
+                    .min(inner.height.saturating_sub(1));
+                f.render_widget(
+                    warning.block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .border_type(BorderType::Rounded)
+                            .border_style(style(RED))
+                            .padding(Padding::horizontal(1)),
+                    ),
+                    Rect::new(inner.x, inner.y, inner.width, height),
+                );
+                inner.y += height;
+                inner.height = inner.height.saturating_sub(height);
             }
         }
         let field = |label: &str, value: &str, query: &str, language: Language| {
@@ -2526,13 +2549,12 @@ impl App {
                         ));
                     }
                 }
-                if matches!(self.page, 1 | 4) {
-                    if let Some(fields) = fields {
-                        for label in *labels {
-                            if let Some((_, value)) = fields.iter().find(|(name, _)| name == label)
-                            {
-                                lines.extend(field(label, value, query, language));
-                            }
+                if matches!(self.page, 1 | 4)
+                    && let Some(fields) = fields
+                {
+                    for label in *labels {
+                        if let Some((_, value)) = fields.iter().find(|(name, _)| name == label) {
+                            lines.extend(field(label, value, query, language));
                         }
                     }
                 }
@@ -4099,42 +4121,46 @@ mod tests {
         app.reindex();
         app.source = 1;
         app.update_one();
-        assert!(app
-            .dialog
-            .as_ref()
-            .unwrap()
-            .action
-            .as_ref()
-            .unwrap()
-            .contains(&"--devel".into()));
+        assert!(
+            app.dialog
+                .as_ref()
+                .unwrap()
+                .action
+                .as_ref()
+                .unwrap()
+                .contains(&"--devel".into())
+        );
         app.update(false);
-        assert!(app
-            .dialog
-            .as_ref()
-            .unwrap()
-            .action
-            .as_ref()
-            .unwrap()
-            .contains(&"--devel".into()));
+        assert!(
+            app.dialog
+                .as_ref()
+                .unwrap()
+                .action
+                .as_ref()
+                .unwrap()
+                .contains(&"--devel".into())
+        );
         app.update(true);
-        assert!(app
-            .dialog
-            .as_ref()
-            .unwrap()
-            .action
-            .as_ref()
-            .unwrap()
-            .contains(&"--devel".into()));
+        assert!(
+            app.dialog
+                .as_ref()
+                .unwrap()
+                .action
+                .as_ref()
+                .unwrap()
+                .contains(&"--devel".into())
+        );
         app.source = 0;
         app.update(false);
-        assert!(!app
-            .dialog
-            .as_ref()
-            .unwrap()
-            .action
-            .as_ref()
-            .unwrap()
-            .contains(&"--devel".into()));
+        assert!(
+            !app.dialog
+                .as_ref()
+                .unwrap()
+                .action
+                .as_ref()
+                .unwrap()
+                .contains(&"--devel".into())
+        );
     }
     #[test]
     fn install_targets_the_selected_source_and_installed_enter_only_inspects() {
@@ -4222,10 +4248,12 @@ mod tests {
                 .replace(' ', "");
             assert!(text.contains("无人维护（孤儿包）"));
             assert!(text.contains("已标记过期"));
-            assert!(buffer
-                .content
-                .iter()
-                .any(|c| c.symbol() == "孤" && c.fg == RED));
+            assert!(
+                buffer
+                    .content
+                    .iter()
+                    .any(|c| c.symbol() == "孤" && c.fg == RED)
+            );
             assert!(!text.contains("仓库目录"));
         }
         assert_eq!(
@@ -4243,10 +4271,12 @@ mod tests {
             70,
         );
         assert_eq!(lines[0].spans[1].style.fg, Some(TEXT));
-        assert!(lines[0]
-            .spans
-            .iter()
-            .any(|s| s.content == "a" && s.style.fg == Some(DIM)));
+        assert!(
+            lines[0]
+                .spans
+                .iter()
+                .any(|s| s.content == "a" && s.style.fg == Some(DIM))
+        );
         let network = detail_field(
             "Network",
             "DIRECT (Git follows settings)",
@@ -4254,10 +4284,12 @@ mod tests {
             Language::En,
             70,
         );
-        assert!(network[0]
-            .spans
-            .iter()
-            .any(|s| s.content == "(" && s.style.fg == Some(DIM)));
+        assert!(
+            network[0]
+                .spans
+                .iter()
+                .any(|s| s.content == "(" && s.style.fg == Some(DIM))
+        );
         let help = help_lines("NAVIGATION\nTab  Next panel    Enter  Confirm");
         assert_eq!(help[0].spans[0].style.fg, Some(accent()));
         assert_eq!(help[1].spans[2].style.fg, Some(DIM));
@@ -4283,14 +4315,17 @@ mod tests {
                         .collect::<String>()
                 })
                 .collect();
-            assert!(rows
-                .iter()
-                .any(|row| row.starts_with(&format!("{}second:", " ".repeat(17)))));
+            assert!(
+                rows.iter()
+                    .any(|row| row.starts_with(&format!("{}second:", " ".repeat(17))))
+            );
             assert!(!rows.iter().any(|row| row.contains('·')));
-            assert!(lines
-                .iter()
-                .flat_map(|l| &l.spans)
-                .any(|s| s.style.bg == Some(YELLOW)));
+            assert!(
+                lines
+                    .iter()
+                    .flat_map(|l| &l.spans)
+                    .any(|s| s.style.bg == Some(YELLOW))
+            );
             let url = detail_field(
                 "URL",
                 "https://example.org/a/very/long/path/without/whitespace",
@@ -4363,12 +4398,14 @@ mod tests {
             .map(|c| c.symbol())
             .collect::<String>();
         assert!(screen.contains("2/1000"));
-        assert!(terminal
-            .backend()
-            .buffer()
-            .content
-            .iter()
-            .any(|c| c.symbol() == "┃"));
+        assert!(
+            terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .any(|c| c.symbol() == "┃")
+        );
         app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .unwrap();
         assert_eq!(
@@ -4402,10 +4439,11 @@ mod tests {
             ["Foo", "foo"]
         );
         let line = highlight("包中文名", "中文", style(TEXT));
-        assert!(line
-            .spans
-            .iter()
-            .any(|s| s.content == "中文" && s.style.bg == Some(YELLOW)));
+        assert!(
+            line.spans
+                .iter()
+                .any(|s| s.content == "中文" && s.style.bg == Some(YELLOW))
+        );
     }
     #[test]
     fn enter_only_targets_the_selected_aur_package() {
@@ -4595,7 +4633,9 @@ mod tests {
     }
     #[test]
     fn review_diff_colors_only_diff_content() {
-        let lines=review_lines("Review changes for example:\n--- a/PKGBUILD\n+++ b/PKGBUILD\n@@ -1 +1 @@\n-old\n+new\n context");
+        let lines = review_lines(
+            "Review changes for example:\n--- a/PKGBUILD\n+++ b/PKGBUILD\n@@ -1 +1 @@\n-old\n+new\n context",
+        );
         assert_eq!(lines[1].spans[0].style.fg, Some(BLUE));
         assert_eq!(lines[2].spans[0].style.fg, Some(BLUE));
         assert_eq!(lines[3].spans[0].style.fg, Some(accent()));

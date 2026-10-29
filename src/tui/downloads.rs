@@ -1,11 +1,11 @@
 use super::bridge::DownloadEvent;
-use super::theme::{accent, BORDER, GREEN, RED};
+use super::theme::{BORDER, GREEN, RED, accent};
 use ratatui::{
+    Frame,
     layout::Rect,
     style::Style,
     text::{Line, Span},
     widgets::Paragraph,
-    Frame,
 };
 use std::{
     collections::{BTreeMap, VecDeque},

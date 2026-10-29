@@ -8,10 +8,10 @@ use crate::util::{get_provider, reopen_stdin};
 use crate::{alpm_debug_enabled, help, printtr, repo};
 
 use std::env::consts::ARCH;
-use std::env::{remove_var, set_var, var};
+use std::env::var;
 use std::fmt;
-use std::fs::{remove_file, OpenOptions};
-use std::io::{stderr, stdin, stdout, BufRead, IsTerminal};
+use std::fs::{OpenOptions, remove_file};
+use std::io::{BufRead, IsTerminal, stderr, stdin, stdout};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -20,7 +20,7 @@ use alpm::{
 };
 use ansiterm::Color::{Blue, Cyan, Green, Purple, Red, Yellow};
 use ansiterm::Style;
-use anyhow::{anyhow, bail, ensure, Context, Error, Result};
+use anyhow::{Context, Error, Result, anyhow, bail, ensure};
 
 use bitflags::bitflags;
 use cini::{Callback, CallbackKind, Ini};
@@ -281,13 +281,28 @@ impl ConfigEnum for raur::SearchBy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortMode {
+    Auto,
     BottomUp,
     TopDown,
 }
 
 impl ConfigEnum for SortMode {
-    const VALUE_LOOKUP: ConfigEnumValues<Self> =
-        &[("bottomup", Self::BottomUp), ("topdown", Self::TopDown)];
+    const VALUE_LOOKUP: ConfigEnumValues<Self> = &[
+        ("auto", Self::Auto),
+        ("bottomup", Self::BottomUp),
+        ("topdown", Self::TopDown),
+    ];
+}
+
+impl SortMode {
+    pub fn is_top_down(self, interactive: bool) -> bool {
+        match (self, interactive) {
+            (SortMode::TopDown, _) => true,
+            (SortMode::BottomUp, _) => false,
+            (SortMode::Auto, true) => false,
+            (SortMode::Auto, false) => true,
+        }
+    }
 }
 
 bitflags! {
@@ -390,10 +405,7 @@ pub struct Config {
 
     pub op: Op,
 
-    #[cfg(not(feature = "mock"))]
-    pub raur: raur::Handle,
-    #[cfg(feature = "mock")]
-    pub raur: crate::mock::Mock,
+    pub raur: Option<crate::RaurHandle>,
     #[default(aur_fetch::Fetch::with_cache_dir(""))]
     pub fetch: aur_fetch::Fetch,
     pub cache: raur::Cache,
@@ -431,7 +443,7 @@ pub struct Config {
     #[default(raur::SearchBy::NameDesc)]
     pub search_by: raur::SearchBy,
     pub limit: usize,
-    #[default(SortMode::TopDown)]
+    #[default(SortMode::Auto)]
     pub sort_mode: SortMode,
     #[default(Mode::empty())]
     pub mode: Mode,
@@ -506,6 +518,12 @@ pub struct Config {
     pub no_warn_builder: GlobSetBuilder,
     pub install_debug: bool,
 
+    pub min_release_age: Option<std::time::Duration>,
+    #[default(GlobSet::empty())]
+    pub min_release_age_exclude: GlobSet,
+    #[default(GlobSetBuilder::new())]
+    pub min_release_age_exclude_builder: GlobSetBuilder,
+
     pub upgrade_menu: bool,
 
     pub makepkg_conf: Option<String>,
@@ -575,7 +593,24 @@ impl Ini for Config {
     }
 }
 
+/// Whether `pkg` ends with any of the configured devel suffixes.
+pub fn matches_devel(suffixes: &[String], pkg: &str) -> bool {
+    suffixes.iter().any(|suff| pkg.ends_with(suff))
+}
+
 impl Config {
+    pub fn is_devel(&self, pkg: &str) -> bool {
+        matches_devel(&self.devel_suffixes, pkg)
+    }
+
+    pub fn is_release_age_exempt(&self, pkg: &str) -> bool {
+        self.is_devel(pkg) || self.min_release_age_exclude.is_match(pkg)
+    }
+
+    pub fn is_too_new(&self, pkg: &str, last_modified: i64, now: i64, max: i64) -> bool {
+        !self.is_release_age_exempt(pkg) && now.saturating_sub(last_modified) < max
+    }
+
     pub fn new() -> Result<Self> {
         let cache =
             dirs::cache_dir().ok_or_else(|| anyhow!(tr!("failed to find cache directory")))?;
@@ -618,14 +653,13 @@ impl Config {
             ..Self::default()
         };
 
-        if let Some(old) = old {
-            if let Ok(devel) = OpenOptions::new().read(true).open(old) {
-                if let Ok(devel) = serde_json::from_reader(devel) {
-                    save_devel_info(&config, &devel)?;
-                    let _ = remove_file(&old_devel_path);
-                    let _ = remove_file(&old_old_devel_path);
-                }
-            }
+        if let Some(old) = old
+            && let Ok(devel) = OpenOptions::new().read(true).open(old)
+            && let Ok(devel) = serde_json::from_reader(devel)
+        {
+            save_devel_info(&config, &devel)?;
+            let _ = remove_file(&old_devel_path);
+            let _ = remove_file(&old_old_devel_path);
         }
 
         if let Ok(conf) = var("PARU_CONF") {
@@ -716,6 +750,10 @@ impl Config {
             std::process::exit(0);
         }
 
+        Ok(())
+    }
+
+    pub fn init(&mut self) -> Result<()> {
         self.init_pacmanconf()?;
         self.init_alpm()?;
 
@@ -738,12 +776,12 @@ impl Config {
                 None => self.aur_url.join("rpc")?.to_string(),
             };
 
-            self.raur = raur::Handle::new_with_settings(client, rpc_url);
+            self.raur = Some(raur::Handle::new_with_settings(client, rpc_url));
         }
 
         #[cfg(feature = "mock")]
         {
-            self.raur = crate::mock::Mock::new()?;
+            self.raur = Some(crate::mock::Mock::new()?);
         }
 
         let aur_url = if self.ssh {
@@ -826,6 +864,7 @@ then initialise it with:
         }
 
         self.no_warn = self.no_warn_builder.build()?;
+        self.min_release_age_exclude = self.min_release_age_exclude_builder.build()?;
         self.ignore_devel = self.ignore_devel_builder.build()?;
 
         if !self.assume_installed.is_empty() && !self.chroot {
@@ -833,10 +872,6 @@ then initialise it with:
         }
         if self.no_check {
             self.mflags.push("--nocheck".to_string());
-        }
-
-        if self.chroot {
-            remove_var("PKGEXT");
         }
 
         Ok(())
@@ -995,7 +1030,6 @@ then initialise it with:
         );
 
         self.env.push((key.to_owned(), value.to_string()));
-        set_var(key, value);
         Ok(())
     }
 
@@ -1041,6 +1075,8 @@ then initialise it with:
         match key {
             "SkipReview" => self.skip_review = true,
             "BottomUp" => self.sort_mode = SortMode::BottomUp,
+            "TopDown" => self.sort_mode = SortMode::TopDown,
+            "Auto" => self.sort_mode = SortMode::Auto,
             "AurOnly" => self.mode = Mode::AUR,
             "PkgbuildsOnly" => self.mode = Mode::PKGBUILD,
             "RepoOnly" => self.mode = Mode::REPO,
@@ -1134,6 +1170,12 @@ then initialise it with:
             "NoWarn" => {
                 for word in value?.split_whitespace() {
                     self.no_warn_builder.add(Glob::new(word)?);
+                }
+            }
+            "MinimumReleaseAge" => self.min_release_age = Some(parse_release_age(&value?)?),
+            "MinimumReleaseAgeExclude" => {
+                for word in value?.split_whitespace() {
+                    self.min_release_age_exclude_builder.add(Glob::new(word)?);
                 }
             }
             "Mode" => {
@@ -1245,6 +1287,33 @@ fn download(filename: &str, event: AnyDownloadEvent, _: &mut ()) {
     }
 }
 
+/// Parse a release-age duration: an integer with an optional unit suffix
+/// (`s`, `m`, `h`, `d`, `w`). A bare number is interpreted as days.
+pub fn parse_release_age(s: &str) -> Result<std::time::Duration> {
+    let s = s.trim();
+    let (num, unit_secs) = match s.as_bytes().last() {
+        Some(b's') => (&s[..s.len() - 1], 1),
+        Some(b'm') => (&s[..s.len() - 1], 60),
+        Some(b'h') => (&s[..s.len() - 1], 60 * 60),
+        Some(b'd') => (&s[..s.len() - 1], 60 * 60 * 24),
+        Some(b'w') => (&s[..s.len() - 1], 60 * 60 * 24 * 7),
+        Some(b'0'..=b'9') => (s, 60 * 60 * 24),
+        _ => bail!(tr!("invalid release age '{}'", s)),
+    };
+
+    let num: u64 = num
+        .trim()
+        .parse()
+        .map_err(|_| anyhow!(tr!("invalid release age '{}'", s)))?;
+
+    let secs = num
+        .checked_mul(unit_secs)
+        .filter(|&secs| secs <= i64::MAX as u64)
+        .ok_or_else(|| anyhow!(tr!("release age '{}' is too large", s)))?;
+
+    Ok(std::time::Duration::from_secs(secs))
+}
+
 fn log(level: LogLevel, msg: &str, color: &mut Colors) {
     let err = color.error;
     let warn = color.warning;
@@ -1254,5 +1323,115 @@ fn log(level: LogLevel, msg: &str, color: &mut Colors) {
         LogLevel::ERROR => eprint!("{} {}", err.paint("error:"), msg),
         LogLevel::DEBUG if alpm_debug_enabled() => eprint!("debug: <alpm> {}", msg),
         _ => (),
+    }
+}
+
+#[cfg(test)]
+mod sort_tests {
+    use super::{Config, SortMode};
+
+    #[test]
+    fn sorting_options_override_config_in_command_line_order() {
+        let mut config = Config::default();
+        let mut op_count = 0;
+        let mut end_of_ops = false;
+        config.parse_option("BottomUp", None).unwrap();
+        assert!(!config.sort_mode.is_top_down(false));
+
+        for (arg, search_top_down, menu_top_down) in [
+            ("--topdown", true, true),
+            ("--bottomup", false, false),
+            ("--auto", true, false),
+        ] {
+            assert!(
+                !config
+                    .parse_arg(arg, None, &mut op_count, &mut end_of_ops)
+                    .unwrap()
+            );
+            assert_eq!(config.sort_mode.is_top_down(false), search_top_down);
+            assert_eq!(config.sort_mode.is_top_down(true), menu_top_down);
+        }
+        assert_eq!(op_count, 0);
+        assert!(
+            config
+                .parse_arg("--auto=topdown", None, &mut op_count, &mut end_of_ops)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn auto_config_restores_operation_dependent_ordering() {
+        let mut config = Config::default();
+        assert_eq!(config.sort_mode, SortMode::Auto);
+        config.parse_option("BottomUp", None).unwrap();
+        config.parse_option("Auto", None).unwrap();
+        assert!(config.sort_mode.is_top_down(false));
+        assert!(!config.sort_mode.is_top_down(true));
+        config.parse_option("TopDown", None).unwrap();
+        assert!(config.sort_mode.is_top_down(true));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Config, parse_release_age};
+    use globset::{Glob, GlobSetBuilder};
+
+    #[test]
+    fn release_age_units() {
+        let secs = |s| parse_release_age(s).unwrap().as_secs();
+        assert_eq!(secs("7"), 7 * 86400);
+        assert_eq!(secs("7d"), 7 * 86400);
+        assert_eq!(secs("48h"), 48 * 3600);
+        assert_eq!(secs("30m"), 30 * 60);
+        assert_eq!(secs("45s"), 45);
+        assert_eq!(secs("2w"), 2 * 7 * 86400);
+        assert_eq!(secs("0"), 0);
+    }
+
+    #[test]
+    fn release_age_invalid() {
+        assert!(parse_release_age("").is_err());
+        assert!(parse_release_age("7y").is_err());
+        assert!(parse_release_age("abc").is_err());
+        assert!(parse_release_age("-1").is_err());
+        assert!(parse_release_age("d").is_err());
+        assert!(parse_release_age("100000000000000000d").is_err());
+    }
+
+    #[test]
+    fn release_age_signed_limit() {
+        assert_eq!(
+            parse_release_age("9223372036854775807s").unwrap().as_secs(),
+            i64::MAX as u64
+        );
+        assert!(parse_release_age("9223372036854775808s").is_err());
+        assert!(parse_release_age("106751991167301d").is_err());
+    }
+
+    #[test]
+    fn release_age_boundary_and_future_dates() {
+        let config = Config::default();
+        assert!(!config.is_too_new("pkg", 86_400, 172_800, 86_400));
+        assert!(config.is_too_new("pkg", 86_401, 172_800, 86_400));
+        assert!(!config.is_too_new("pkg", 0, 172_800, 86_400));
+        assert!(config.is_too_new("pkg", 172_801, 172_800, 1));
+        assert!(!config.is_too_new("pkg", i64::MIN, i64::MAX, 1));
+        assert!(config.is_too_new("pkg", i64::MAX, i64::MIN, 1));
+    }
+
+    #[test]
+    fn release_age_exemptions() {
+        let config = Config {
+            devel_suffixes: vec!["-git".into()],
+            min_release_age_exclude: GlobSetBuilder::new()
+                .add(Glob::new("trusted-*").unwrap())
+                .build()
+                .unwrap(),
+            ..Default::default()
+        };
+        assert!(!config.is_too_new("pkg-git", 100, 100, 60));
+        assert!(!config.is_too_new("trusted-pkg", 100, 100, 60));
+        assert!(config.is_too_new("pkg", 100, 100, 60));
     }
 }

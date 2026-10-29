@@ -1,8 +1,8 @@
-use crate::config::{Colors, Config, SortMode, YesNoAll};
+use crate::RaurHandle;
+use crate::config::{Colors, Config, YesNoAll};
 use crate::exec::has_command;
 use crate::fmt::print_indent;
 use crate::util::is_arch_repo;
-use crate::RaurHandle;
 use crate::{exec, printtr};
 
 use std::collections::btree_map::Entry;
@@ -17,7 +17,7 @@ use std::result::Result as StdResult;
 use alpm::Version;
 use alpm_utils::{AsTarg, DbListExt, Targ};
 use ansiterm::Style;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use aur_depends::AurBase;
 
 use globset::GlobSet;
@@ -207,7 +207,7 @@ pub async fn getpkgbuilds(config: &mut Config) -> Result<i32> {
             bold.paint(tr!("Querying AUR..."))
         );
         let warnings = cache_info_with_warnings(
-            &config.raur,
+            config.raur.as_ref().unwrap(),
             &mut config.cache,
             &aur,
             &config.ignore,
@@ -432,10 +432,10 @@ pub async fn new_aur_pkgbuilds(
 }
 
 pub async fn show_comments(config: &mut Config) -> Result<i32> {
-    let client = config.raur.client();
+    let client = config.raur.as_ref().unwrap().client();
 
     let warnings = cache_info_with_warnings(
-        &config.raur,
+        config.raur.as_ref().unwrap(),
         &mut config.cache,
         &config.targets,
         &[],
@@ -480,7 +480,7 @@ pub async fn show_comments(config: &mut Config) -> Result<i32> {
 
         let iter = titles.zip(comments).collect::<Vec<_>>();
 
-        if config.sort_mode == SortMode::TopDown {
+        if config.sort_mode.is_top_down(false) {
             for (title, comment) in iter.into_iter() {
                 print_indent(c.bold, 0, 0, config.cols, " ", title.split_whitespace());
 
@@ -558,7 +558,7 @@ pub async fn show_pkgbuilds(config: &mut Config) -> Result<i32> {
     let stdout = std::io::stdout();
     let mut stdout = stdout.lock();
     let bat = config.color.enabled && has_command(&config.bat_bin);
-    let client = config.raur.client();
+    let client = config.raur.as_ref().unwrap().client();
 
     let (repo, pkgbuild, aur) = split_target_pkgbuilds(config, &config.targets);
 
@@ -619,7 +619,7 @@ pub async fn show_pkgbuilds(config: &mut Config) -> Result<i32> {
         let aur = aur.iter().map(|t| t.pkg).collect::<Vec<_>>();
 
         let warnings = cache_info_with_warnings(
-            &config.raur,
+            config.raur.as_ref().unwrap(),
             &mut config.cache,
             &aur,
             &[],
@@ -662,7 +662,8 @@ pub async fn show_pkgbuilds(config: &mut Config) -> Result<i32> {
 fn pipe_bat(config: &Config, pkgbuild: &[u8]) -> Result<()> {
     let mut command = Command::new(&config.bat_bin);
     command
-        .arg("-pp")
+        .arg("--paging=never")
+        .arg("--style=plain")
         .arg("--color=always")
         .arg("-lPKGBUILD")
         .args(&config.bat_flags)

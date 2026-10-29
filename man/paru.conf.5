@@ -29,6 +29,15 @@ Options belonging to the [options] section.
 Print search results from bottom to top. AUR results will be printed first.
 
 .TP
+.B TopDown
+Print search results from top to bottom. Repository results will be printed first.
+
+.TP
+.B Auto
+Use bottom-up ordering in interactive package selection menus and top-down
+ordering for ordinary search and list output. This is the default.
+
+.TP
 .B AurOnly
 Assume all targets are from the AUR. Additionally, actions such as
 sysupgrade will only act on AUR packages.
@@ -241,6 +250,45 @@ set.
 Don't warn when these packages are not in the aur, out of date, or orphaned.
 
 .TP
+.B MinimumReleaseAge = Duration
+Refuse to install or upgrade AUR packages whose AUR-reported modification time
+is more recent than this, and hide them from AUR search results. The value is
+an integer with an optional unit suffix:
+.B s
+(seconds),
+.B m
+(minutes),
+.B h
+(hours),
+.B d
+(days) or
+.B w
+(weeks). A bare number is interpreted as days. The delay gives users time to
+review newly published changes before installing them.
+
+The check applies to the whole resolved transaction, including dependencies. If
+any package is too new, paru aborts and lists the offending packages. Devel
+(\fB-git\fR and similar) packages are exempt, as they are tracked by upstream
+commit rather than AUR publish time. Note this exemption is keyed on the package
+name suffix (see
+.BR DevelSuffixes ),
+so a package merely named with such a suffix is exempt regardless of how it is
+built. Disabled by default. Pass
+.B \-\-nominimumreleaseage
+to override for a single run.
+
+After downloading PKGBUILDs, paru requests current AUR metadata again and
+aborts if a protected package changed while the transaction was being prepared.
+This check uses AUR metadata, not Git commit dates. It does not constrain local
+PKGBUILD edits or changes to sources downloaded by makepkg.
+
+.TP
+.B MinimumReleaseAgeExclude = Packages...
+Packages exempt from
+.BR MinimumReleaseAge .
+Accepts glob patterns.
+
+.TP
 .B LocalRepo [= Repos...]
 Use a local repo to build and upgrade AUR packages.
 
@@ -250,6 +298,17 @@ The repo must already be declared in pacman.conf but does not have to already ex
 Optionally a list of repos to use can be passed. By default paru will consider all
 local repos, building new packages into the first listed repo and upgrading the packages
 in other enabled repos.
+
+Foreign AUR packages installed outside any configured local repo (e.g. installed
+before LocalRepo was enabled, or via ad-hoc \fBmakepkg -si\fR) are not checked for
+updates by \fBparu -Syu\fR while LocalRepo is active. To check them, run
+\fBparu -Syu --nolocalrepo\fR, or bring them into the configured repo with:
+
+.nf
+.RS
+pacman -Qmq | paru -Ta - | paru -Sa -
+.RE
+.fi
 
 .TP
 .B Chroot [= path/to/chroot]
@@ -297,8 +356,8 @@ The command to use for \fBgit\fR calls. This can be a command in
 \fBPATH\fR or an absolute path to the file.
 
 .TP
-.B Asp = path/to/asp
-The command to use for \fBasp\fR calls. This can be a command in
+.B Pkgctl = path/to/pkgctl
+The command to use for \fBpkgctl\fR calls. This can be a command in
 \fBPATH\fR or an absolute path to the file.
 
 .TP

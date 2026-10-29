@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
@@ -191,10 +191,13 @@ pub(crate) fn validate_worker(chroot: bool) -> Result<()> {
     if super::bridge::connected() && chroot {
         bail!("Native TUI transactions do not support chroot builds yet");
     }
-    if let Some(settings) = worker_settings() {
-        if chroot && (!settings.proxy_bases.is_empty() || settings.git_proxy) {
-            bail!("Managed proxy rules are not supported inside a chroot; disable chroot mode for this operation");
-        }
+    if let Some(settings) = worker_settings()
+        && chroot
+        && (!settings.proxy_bases.is_empty() || settings.git_proxy)
+    {
+        bail!(
+            "Managed proxy rules are not supported inside a chroot; disable chroot mode for this operation"
+        );
     }
     Ok(())
 }
@@ -261,7 +264,9 @@ pub(super) fn configure_git(
             r.starts_with("ssh://") || r.starts_with("git@") || r.starts_with("git://")
         })
     {
-        bail!("Managed proxy requires an HTTP(S) Git remote; refusing an unproxied SSH/git connection");
+        bail!(
+            "Managed proxy requires an HTTP(S) Git remote; refusing an unproxied SSH/git connection"
+        );
     }
     route(command, settings, base, true);
     // Per-command override defeats inherited Git proxy configuration for direct repositories.
@@ -325,17 +330,21 @@ mod tests {
     }
     #[test]
     fn invalid_policy_is_rejected() {
-        assert!(Settings {
-            git_proxy: true,
-            ..Default::default()
-        }
-        .validate()
-        .is_err());
-        assert!(Settings {
-            proxy_url: "file:///tmp/proxy".into(),
-            ..Default::default()
-        }
-        .validate()
-        .is_err());
+        assert!(
+            Settings {
+                git_proxy: true,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Settings {
+                proxy_url: "file:///tmp/proxy".into(),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
     }
 }

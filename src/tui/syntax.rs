@@ -1,4 +1,4 @@
-use super::theme::{accent, BLUE, GREEN, MUTED as DIM, TEXT, YELLOW};
+use super::theme::{BLUE, GREEN, MUTED as DIM, TEXT, YELLOW, accent};
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
@@ -267,10 +267,12 @@ mod tests {
         let lines = pkgbuild("\tlocal value=\"a\tb\" # note");
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "        local value=\"a  b\" # note");
-        assert!(lines[0]
-            .spans
-            .iter()
-            .any(|s| s.content == "local" && s.style.fg == Some(accent())));
+        assert!(
+            lines[0]
+                .spans
+                .iter()
+                .any(|s| s.content == "local" && s.style.fg == Some(accent()))
+        );
     }
 
     #[test]
@@ -342,27 +344,37 @@ mod tests {
             );
         }
         assert_eq!(lines[0].spans[0].style.fg, Some(DIM));
-        assert!(lines[0].spans[0]
-            .style
-            .add_modifier
-            .contains(Modifier::ITALIC));
+        assert!(
+            lines[0].spans[0]
+                .style
+                .add_modifier
+                .contains(Modifier::ITALIC)
+        );
         assert_eq!(lines[1].spans[0].style.fg, Some(BLUE));
-        assert!(lines[1].spans[0]
-            .style
-            .add_modifier
-            .contains(Modifier::BOLD));
-        assert!(lines[3]
-            .spans
-            .iter()
-            .any(|span| span.content == "$pkgname" && span.style.fg == Some(accent())));
-        assert!(lines[4]
-            .spans
-            .iter()
-            .any(|span| span.content == "build" && span.style.fg == Some(GREEN)));
-        assert!(lines[5]
-            .spans
-            .iter()
-            .any(|span| span.content == "if" && span.style.fg == Some(accent())));
+        assert!(
+            lines[1].spans[0]
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+        assert!(
+            lines[3]
+                .spans
+                .iter()
+                .any(|span| span.content == "$pkgname" && span.style.fg == Some(accent()))
+        );
+        assert!(
+            lines[4]
+                .spans
+                .iter()
+                .any(|span| span.content == "build" && span.style.fg == Some(GREEN))
+        );
+        assert!(
+            lines[5]
+                .spans
+                .iter()
+                .any(|span| span.content == "if" && span.style.fg == Some(accent()))
+        );
     }
 
     #[test]
@@ -373,9 +385,11 @@ mod tests {
         let comment = lines[2].spans.last().unwrap();
         assert_eq!(comment.content, "# comment");
         assert_eq!(comment.style.fg, Some(DIM));
-        assert!(lines[2]
-            .spans
-            .iter()
-            .any(|span| span.content.contains("#fragment") && span.style.fg == Some(TEXT)));
+        assert!(
+            lines[2]
+                .spans
+                .iter()
+                .any(|span| span.content.contains("#fragment") && span.style.fg == Some(TEXT))
+        );
     }
 }

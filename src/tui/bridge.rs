@@ -173,10 +173,11 @@ pub fn choose(text: &str, choices: &[String]) -> Option<usize> {
         .join("\n");
     loop {
         let reply = input(&format!("{text}\n{choices}\n\nEnter a provider number:"))?;
-        if let Ok(index) = reply.trim().parse::<usize>() {
-            if index > 0 && index <= choices.lines().count() {
-                return Some(index - 1);
-            }
+        if let Ok(index) = reply.trim().parse::<usize>()
+            && index > 0
+            && index <= choices.lines().count()
+        {
+            return Some(index - 1);
         }
     }
 }
@@ -210,20 +211,20 @@ pub fn download(event: DownloadEvent) {
     emit(String::new(), Some(event));
 }
 fn emit(text: String, download: Option<DownloadEvent>) {
-    if let Some(channel) = CHANNEL.get() {
-        if let Ok(mut channel) = channel.lock() {
-            let message = Question {
-                text,
-                secret: false,
-                notice: true,
-                build: None,
-                download,
-                default: None,
-                plan: Vec::new(),
-            };
-            let _ = serde_json::to_writer(channel.get_mut(), &message);
-            let _ = channel.get_mut().write_all(b"\n");
-        }
+    if let Some(channel) = CHANNEL.get()
+        && let Ok(mut channel) = channel.lock()
+    {
+        let message = Question {
+            text,
+            secret: false,
+            notice: true,
+            build: None,
+            download,
+            default: None,
+            plan: Vec::new(),
+        };
+        let _ = serde_json::to_writer(channel.get_mut(), &message);
+        let _ = channel.get_mut().write_all(b"\n");
     }
 }
 

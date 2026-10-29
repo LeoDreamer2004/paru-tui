@@ -1,13 +1,13 @@
 use std::path::Path;
 
+use crate::config::Config;
 use crate::config::SortBy;
-use crate::config::{Config, SortMode};
 use crate::fmt::{color_repo, link_str, print_indent};
-use crate::util::{input, is_arch_repo, NumberMenu};
+use crate::util::{NumberMenu, input, is_arch_repo, now_secs};
 use crate::{info, printtr};
 
 use ansiterm::Style;
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use flate2::read::GzDecoder;
 use indicatif::HumanBytes;
 use raur::{Raur, SearchBy};
@@ -53,7 +53,7 @@ pub async fn search(config: &Config) -> Result<i32> {
         }
     };
 
-    if config.sort_mode == SortMode::TopDown {
+    if config.sort_mode.is_top_down(false) {
         for pkg in &repo_pkgs {
             print_alpm_pkg(config, pkg, quiet);
         }
@@ -155,7 +155,7 @@ async fn search_target(config: &Config, targets: &mut Vec<String>) -> Result<Vec
 
     for (i, target) in targets.iter().enumerate() {
         index = i;
-        pkgs = config.raur.search_by(target, by).await;
+        pkgs = config.raur.as_ref().unwrap().search_by(target, by).await;
         if !matches!(pkgs, Err(raur::Error::Aur(_))) {
             break;
         }
@@ -188,7 +188,7 @@ async fn search_aur_regex(config: &Config, targets: &[String]) -> Result<Vec<rau
         .filter(|pkg| regex.is_match(pkg))
         .collect::<Vec<_>>();
     ensure!(pkgs.len() < 2000, "too many packages");
-    let pkgs = config.raur.info(&pkgs).await?;
+    let pkgs = config.raur.as_ref().unwrap().info(&pkgs).await?;
     Ok(pkgs)
 }
 
@@ -227,7 +227,7 @@ pub(crate) async fn search_aur(config: &Config, targets: &[String]) -> Result<Ve
             matches.retain(|p| targets.iter().all(|t| p.name.to_lowercase().contains(t)));
         } else {
             for target in targets {
-                let pkgs = config.raur.search_by(target, by).await?;
+                let pkgs = config.raur.as_ref().unwrap().search_by(target, by).await?;
                 matches.extend(pkgs);
             }
         }
@@ -236,7 +236,7 @@ pub(crate) async fn search_aur(config: &Config, targets: &[String]) -> Result<Ve
     };
 
     match config.sort_by {
-        SortBy::Votes => matches.sort_by_key(|p| std::cmp::Reverse(p.num_votes)),
+        SortBy::Votes => matches.sort_by_key(|a| std::cmp::Reverse(a.num_votes)),
         SortBy::Popularity => {
             matches.sort_by(|a, b| b.popularity.partial_cmp(&a.popularity).unwrap())
         }
@@ -246,6 +246,12 @@ pub(crate) async fn search_aur(config: &Config, targets: &[String]) -> Result<Ve
         SortBy::Submitted => matches.sort_by_key(|p| p.first_submitted),
         SortBy::Modified => matches.sort_by_key(|p| p.last_modified),
         _ => (),
+    }
+
+    if let Some(max) = config.min_release_age {
+        let now = now_secs();
+        let max = max.as_secs() as i64;
+        matches.retain(|p| !config.is_too_new(&p.name, p.last_modified, now, max));
     }
 
     if config.limit != 0 {
@@ -383,15 +389,15 @@ fn print_alpm_pkg(config: &Config, pkg: &alpm::Package, quiet: bool) {
     );
     let ver: &str = pkg.version().as_ref();
     let mut repo = color_repo(c.enabled, pkg.db().unwrap().name());
-    if is_arch_repo(pkg.db().unwrap().name()) {
-        if let Ok(url) = config.arch_url.join(&format!(
+    if is_arch_repo(pkg.db().unwrap().name())
+        && let Ok(url) = config.arch_url.join(&format!(
             "packages/{}/{}/{}/",
             pkg.db().unwrap().name(),
             pkg.arch().unwrap_or("any"),
             pkg.name()
-        )) {
-            repo = link_str(c.enabled, &repo, url.as_str());
-        }
+        ))
+    {
+        repo = link_str(c.enabled, &repo, url.as_str());
     }
 
     let name = if let Some(url) = pkg.url() {
@@ -432,10 +438,10 @@ fn print_alpm_pkg(config: &Config, pkg: &alpm::Package, quiet: bool) {
     let desc = desc.unwrap_or_default().split_whitespace();
     print_indent(Style::new(), 4, 4, config.cols, " ", desc);
 
-    if config.args.count("s", "search") > 1 {
-        if let Some(url) = pkg.url() {
-            info::print(c, 14, config.cols, "    URL", url);
-        }
+    if config.args.count("s", "search") > 1
+        && let Some(url) = pkg.url()
+    {
+        info::print(c, 14, config.cols, "    URL", url);
     }
 }
 
@@ -518,7 +524,7 @@ pub fn interactive_menu(
         all_pkgs.insert(0, pkg);
     }
 
-    if config.sort_mode == SortMode::TopDown {
+    if config.sort_mode.is_top_down(true) {
         for (n, pkg) in all_pkgs.iter().enumerate() {
             print_any_pkg(config, n, pad, pkg)
         }
@@ -541,7 +547,7 @@ pub fn interactive_menu(
     let menu = NumberMenu::new(&input);
     let mut pkgs = Vec::new();
 
-    if config.sort_mode == SortMode::TopDown {
+    if config.sort_mode.is_top_down(true) {
         for (n, pkg) in all_pkgs.iter().enumerate() {
             if menu.contains(n + 1, "") {
                 match pkg {
@@ -600,4 +606,61 @@ fn print_any_pkg(config: &Config, n: usize, pad: usize, pkg: &AnyPkg) {
             print_pkgbuild_pkg(config, repo, path, base, pkg, false)
         }
     };
+}
+
+#[cfg(all(test, feature = "mock"))]
+mod release_age_tests {
+    use super::search_aur;
+    use crate::config::{Config, Mode, SortBy};
+    use crate::mock::Mock;
+    use crate::util::now_secs;
+    use globset::{Glob, GlobSetBuilder};
+    use raur::Package;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn age_filter_precedes_limit_and_preserves_exemptions() {
+        let now = now_secs();
+        let mut config = Config::default();
+        config.mode = Mode::AUR;
+        config.sort_by = SortBy::Name;
+        config.limit = 1;
+        config.min_release_age = Some(Duration::from_secs(86_400));
+        config.devel_suffixes = vec!["-git".into()];
+        config.min_release_age_exclude = GlobSetBuilder::new()
+            .add(Glob::new("pkg-d-*").unwrap())
+            .build()
+            .unwrap();
+        config.raur = Some(Mock::with_packages(
+            [
+                ("pkg-a-new", now),
+                ("pkg-b-old", now - 2 * 86_400),
+                ("pkg-c-git", now),
+                ("pkg-d-excluded", now),
+            ]
+            .into_iter()
+            .map(|(name, last_modified)| Package {
+                name: name.into(),
+                last_modified,
+                ..Package::default()
+            }),
+        ));
+        let query = ["pkg".into()];
+        let matches = search_aur(&config, &query).await.unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].name, "pkg-b-old");
+
+        config.limit = 0;
+        let matches = search_aur(&config, &query).await.unwrap();
+        let names = matches
+            .iter()
+            .map(|pkg| pkg.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["pkg-b-old", "pkg-c-git", "pkg-d-excluded"]);
+
+        config.min_release_age = None;
+        let matches = search_aur(&config, &query).await.unwrap();
+        assert_eq!(matches.len(), 4);
+        assert_eq!(matches[0].name, "pkg-a-new");
+    }
 }

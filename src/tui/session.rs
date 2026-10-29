@@ -139,20 +139,20 @@ impl Session {
         if self.building {
             self.parser.process(&output);
         }
-        if self.code.is_none() {
-            if let Some(status) = self.pty.status()? {
-                use std::os::unix::process::ExitStatusExt;
-                self.code = Some(
-                    status
-                        .code()
-                        .unwrap_or_else(|| 128 + status.signal().unwrap_or(1)),
-                );
-                self.elapsed = Some(self.started.elapsed());
-                self.finished_at = Some(std::time::Instant::now());
-                let output = self.pty.read_available()?;
-                if self.building {
-                    self.parser.process(&output);
-                }
+        if self.code.is_none()
+            && let Some(status) = self.pty.status()?
+        {
+            use std::os::unix::process::ExitStatusExt;
+            self.code = Some(
+                status
+                    .code()
+                    .unwrap_or_else(|| 128 + status.signal().unwrap_or(1)),
+            );
+            self.elapsed = Some(self.started.elapsed());
+            self.finished_at = Some(std::time::Instant::now());
+            let output = self.pty.read_available()?;
+            if self.building {
+                self.parser.process(&output);
             }
         }
         let mut notice = None;

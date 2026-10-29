@@ -171,6 +171,7 @@ pub(super) fn config() -> Result<Config> {
         config.parse(None, &text)?;
     }
     config.parse_args(["-Q", "--color", "never"])?;
+    config.init()?;
     // Database diagnostics belong in the UI error path, never on its terminal.
     config.alpm.set_log_cb((), |_, _, _| {});
     Ok(config)
@@ -202,10 +203,10 @@ async fn load_inner(sender: &Sender<Event>, settings: &super::settings::Settings
             found.map_or("foreign", |(_, db)| db),
             Some(pkg.version().to_string()),
         );
-        if let Some((remote, _)) = found {
-            if remote.version() > pkg.version() {
-                entry.next = Some(remote.version().to_string());
-            }
+        if let Some((remote, _)) = found
+            && remote.version() > pkg.version()
+        {
+            entry.next = Some(remote.version().to_string());
         }
         catalog.installed.push(entry);
     }
@@ -224,10 +225,10 @@ async fn load_inner(sender: &Sender<Event>, settings: &super::settings::Settings
         .collect::<HashSet<_>>();
     let cached = cached_aur_bases(&config.fetch.clone_dir, &installed);
     for package in &mut catalog.installed {
-        if package.source == "foreign" {
-            if let Some(base) = cached.get(&package.name) {
-                mark_aur(package, base);
-            }
+        if package.source == "foreign"
+            && let Some(base) = cached.get(&package.name)
+        {
+            mark_aur(package, base);
         }
     }
     let _ = sender.send(Event::Loaded(catalog.clone()));
@@ -250,28 +251,34 @@ async fn load_inner(sender: &Sender<Event>, settings: &super::settings::Settings
         .map(|p| p.name.clone())
         .collect();
     for package in &mut catalog.installed {
-        if package.source == "foreign" {
-            if let Some(base) = cached.get(&package.name) {
-                mark_aur(package, base);
-            }
+        if package.source == "foreign"
+            && let Some(base) = cached.get(&package.name)
+        {
+            mark_aur(package, base);
         }
     }
     let _ = sender.send(Event::Loaded(catalog.clone()));
     for chunk in foreign.chunks(50) {
-        let packages =
-            match tokio::time::timeout(std::time::Duration::from_secs(15), config.raur.info(chunk))
-                .await
-            {
-                Ok(Ok(packages)) => packages,
-                Ok(Err(error)) => {
-                    let _ = sender.send(Event::Warning(format!("AUR lookup failed: {error:#}")));
-                    break;
-                }
-                Err(_) => {
-                    let _ = sender.send(Event::Warning("AUR lookup timed out".into()));
-                    break;
-                }
-            };
+        let packages = match tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            config
+                .raur
+                .as_ref()
+                .expect("AUR client initialized")
+                .info(chunk),
+        )
+        .await
+        {
+            Ok(Ok(packages)) => packages,
+            Ok(Err(error)) => {
+                let _ = sender.send(Event::Warning(format!("AUR lookup failed: {error:#}")));
+                break;
+            }
+            Err(_) => {
+                let _ = sender.send(Event::Warning("AUR lookup timed out".into()));
+                break;
+            }
+        };
         for remote in packages {
             if let Ok(index) = catalog
                 .installed

@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::env::var;
 use std::ffi::OsStr;
 use std::fmt::Write as _;
-use std::fs::{read_dir, read_link, OpenOptions};
+use std::fs::{OpenOptions, read_dir, read_link};
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -14,25 +14,25 @@ use crate::chroot::Chroot;
 use crate::clean::clean_untracked;
 use crate::completion::update_aur_cache;
 use crate::config::{Config, LocalRepos, Mode, Op, Sign, YesNoAllTree, YesNoAsk};
-use crate::devel::{fetch_devel_info, load_devel_info, save_devel_info, DevelInfo};
+use crate::devel::{DevelInfo, fetch_devel_info, load_devel_info, save_devel_info};
 use crate::download::{self, Bases};
 use crate::exec::{command_status, has_command};
 use crate::fmt::{print_indent, print_install, print_install_verbose};
 use crate::keys::check_pgp_keys;
 use crate::pkgbuild::PkgbuildRepo;
 use crate::resolver::{flags, resolver};
-use crate::upgrade::{get_upgrades, Upgrades};
-use crate::util::{ask, repo_aur_pkgs, split_repo_aur_targets};
+use crate::upgrade::{Upgrades, get_upgrades};
+use crate::util::{ask, now_secs, repo_aur_pkgs, split_repo_aur_targets};
 use crate::{args, exec, news, print_error, printtr, repo};
 
 use alpm::{Alpm, Depend, Version};
 use alpm_utils::depends::{satisfies, satisfies_nover, satisfies_provide, satisfies_provide_nover};
 use alpm_utils::{DbListExt, Targ};
 use ansiterm::Style;
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use aur_depends::{Actions, Base, Conflict, DepMissing, RepoPackage};
 use log::debug;
-use raur::Cache;
+use raur::{Cache, Raur};
 use srcinfo::{ArchVecs, Srcinfo};
 use tr::tr;
 
@@ -451,11 +451,7 @@ impl Installer {
             bail!(tr!("packages failed to build: {}", failed.join("  ")));
         }
 
-        if ret != 0 {
-            Status::err(ret)
-        } else {
-            Ok(())
-        }
+        if ret != 0 { Status::err(ret) } else { Ok(()) }
     }
 
     fn debug_paths(
@@ -956,7 +952,14 @@ impl Installer {
 
         let repos = config.pkgbuild_repos.clone();
         let repos = repos.aur_depends_repo(config);
-        let mut resolver = resolver(config, &config.alpm, &config.raur, &mut cache, repos, flags);
+        let mut resolver = resolver(
+            config,
+            &config.alpm,
+            config.raur.as_ref().unwrap(),
+            &mut cache,
+            repos,
+            flags,
+        );
 
         if self.sysupgrade != 0 {
             // TODO?
@@ -1092,6 +1095,7 @@ impl Installer {
         let c = config.color;
 
         print_warnings(config, cache, Some(actions));
+        check_release_age(config, actions.iter_aur_pkgs().map(|p| &*p.pkg))?;
 
         if actions.build.is_empty() && actions.install.is_empty() {
             printtr!(" there is nothing to do");
@@ -1139,6 +1143,7 @@ impl Installer {
 
         let bases = actions.iter_aur_pkgs().cloned().collect();
         self.download_pkgbuilds(config, &bases).await?;
+        recheck_release_age(config, actions.iter_aur_pkgs().map(|p| &*p.pkg)).await?;
 
         for pkg in &actions.build {
             match pkg {
@@ -1256,10 +1261,11 @@ impl Installer {
 }
 
 fn is_debug(pkg: &alpm::Package) -> bool {
-    if let Some(base) = pkg.base() {
-        if pkg.name().ends_with("-debug") && pkg.name().trim_end_matches("-debug") == base {
-            return true;
-        }
+    if let Some(base) = pkg.base()
+        && pkg.name().ends_with("-debug")
+        && pkg.name().trim_end_matches("-debug") == base
+    {
+        return true;
     }
 
     false
@@ -1332,6 +1338,104 @@ fn print_warnings(config: &Config, cache: &Cache, actions: Option<&Actions>) {
     warnings.all(config.color, config.cols);
 }
 
+fn human_age(secs: i64) -> String {
+    let secs = secs.max(0);
+    if secs >= 86400 {
+        let n = secs / 86400;
+        tr!("{n} day" | "{n} days" % n)
+    } else if secs >= 3600 {
+        let n = secs / 3600;
+        tr!("{n} hour" | "{n} hours" % n)
+    } else if secs >= 60 {
+        let n = secs / 60;
+        tr!("{n} minute" | "{n} minutes" % n)
+    } else {
+        tr!("{n} second" | "{n} seconds" % secs)
+    }
+}
+
+async fn recheck_release_age<'a>(
+    config: &Config,
+    packages: impl Iterator<Item = &'a raur::Package>,
+) -> Result<()> {
+    if config.min_release_age.is_none() {
+        return Ok(());
+    }
+
+    let expected = packages
+        .filter(|pkg| !config.is_release_age_exempt(&pkg.name))
+        .collect::<Vec<_>>();
+    if expected.is_empty() {
+        return Ok(());
+    }
+
+    let names = expected.iter().map(|pkg| &pkg.name).collect::<Vec<_>>();
+    // Revalidate after the last fetch, before any downloaded PKGBUILD is executed.
+    let refreshed = config.raur.as_ref().unwrap().info(&names).await?;
+    check_release_age(config, refreshed.iter())?;
+
+    for pkg in expected {
+        let current = refreshed.iter().find(|current| current.name == pkg.name);
+        ensure!(
+            current.is_some_and(|current| {
+                current.id == pkg.id
+                    && current.package_base_id == pkg.package_base_id
+                    && current.package_base == pkg.package_base
+                    && current.version == pkg.version
+                    && current.last_modified == pkg.last_modified
+            }),
+            tr!(
+                "AUR package '{}' changed while downloading PKGBUILDs; retry the operation",
+                pkg.name
+            )
+        );
+    }
+
+    Ok(())
+}
+
+fn check_release_age<'a>(
+    config: &Config,
+    packages: impl Iterator<Item = &'a raur::Package>,
+) -> Result<()> {
+    let Some(max) = config.min_release_age else {
+        return Ok(());
+    };
+
+    let now = now_secs();
+    let max = max.as_secs() as i64;
+
+    let mut too_new = packages
+        .filter(|p| config.is_too_new(&p.name, p.last_modified, now, max))
+        .map(|p| (p.name.as_str(), now.saturating_sub(p.last_modified)))
+        .collect::<Vec<_>>();
+
+    if too_new.is_empty() {
+        return Ok(());
+    }
+
+    too_new.sort_unstable();
+    too_new.dedup();
+
+    let list = too_new
+        .iter()
+        .map(|(name, age)| format!("{} ({})", name, tr!("updated {} ago", human_age(*age))))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    bail!(
+        "{}\n    {}",
+        tr!(
+            "the following AUR packages are newer than the minimum release age of {}: {}",
+            human_age(max),
+            list
+        ),
+        tr!(
+            "pass --nominimumreleaseage with your operation to override (e.g. paru -Syu --nominimumreleaseage), or add a package to MinimumReleaseAgeExclude"
+        )
+    );
+}
+
 fn fmt_stack(want: &DepMissing) -> String {
     match &want.dep {
         Some(dep) => format!("{} ({})", want.pkg, dep),
@@ -1392,15 +1496,13 @@ fn check_actions(
         // Only ignores conflicts for the last package instead of all targets
         // As in theory one target could depend on another and thus must be installed
         let mut conflicts = actions.calculate_conflicts(!config.chroot);
-        if !install_targets {
-            if let Some(build) = actions.build.last() {
-                let pkgs = build.packages().map(|s| s.to_string()).collect::<Vec<_>>();
-                conflicts.retain(|c| {
-                    !c.conflicting
-                        .iter()
-                        .all(|conflicting| pkgs.contains(&conflicting.pkg))
-                });
-            }
+        if !install_targets && let Some(build) = actions.build.last() {
+            let pkgs = build.packages().map(|s| s.to_string()).collect::<Vec<_>>();
+            conflicts.retain(|c| {
+                !c.conflicting
+                    .iter()
+                    .all(|conflicting| pkgs.contains(&conflicting.pkg))
+            });
         }
         conflicts
     } else {
@@ -1660,7 +1762,8 @@ fn print_dir(
             );
             if bat {
                 let mut cmd = Command::new(&config.bat_bin);
-                cmd.arg("-pp")
+                cmd.arg("--paging=never")
+                    .arg("--style=plain")
                     .arg("--color=always")
                     .arg(file.path())
                     .args(&config.bat_flags);
@@ -2095,7 +2198,8 @@ fn parse_package_list(
     dir: &Path,
     pkgdest: Option<&str>,
 ) -> Result<(HashMap<String, String>, String)> {
-    let output = exec::makepkg_output_dest(config, dir, &["--packagelist"], pkgdest)?;
+    let output =
+        exec::makepkg_output_dest(config, dir, &["--packagelist", "--ignorearch"], pkgdest)?;
     let output = String::from_utf8(output.stdout).context("pkgdest is not utf8")?;
     let mut pkgdests = HashMap::new();
     let mut version = String::new();
@@ -2201,22 +2305,21 @@ fn sign_pkg(config: &Config, paths: &[&str]) -> Result<()> {
 }
 
 fn needs_install(config: &Config, base: &Base, version: &str, pkg: &str) -> bool {
-    if config.args.has_arg("needed", "needed") {
-        if let Ok(pkg) = config.alpm.localdb().pkg(pkg) {
-            if pkg.version().as_str() == version {
-                let c = config.color;
-                println!(
-                    "{} {}",
-                    c.warning.paint("::"),
-                    tr!(
-                        "{}-{} is up to date -- skipping install",
-                        base.package_base(),
-                        base.version()
-                    )
-                );
-                return false;
-            }
-        }
+    if config.args.has_arg("needed", "needed")
+        && let Ok(pkg) = config.alpm.localdb().pkg(pkg)
+        && pkg.version().as_str() == version
+    {
+        let c = config.color;
+        println!(
+            "{} {}",
+            c.warning.paint("::"),
+            tr!(
+                "{}-{} is up to date -- skipping install",
+                base.package_base(),
+                base.version()
+            )
+        );
+        return false;
     }
 
     true
@@ -2224,4 +2327,103 @@ fn needs_install(config: &Config, base: &Base, version: &str, pkg: &str) -> bool
 
 fn is_ver_char(c: char) -> bool {
     matches!(c, '<' | '=' | '>')
+}
+
+#[cfg(all(test, feature = "mock"))]
+mod release_age_tests {
+    use super::recheck_release_age;
+    use crate::config::Config;
+    use crate::mock::Mock;
+    use crate::util::now_secs;
+    use raur::Package;
+    use std::time::Duration;
+
+    fn package() -> Package {
+        Package {
+            id: 1,
+            name: "pkg".into(),
+            package_base: "pkg".into(),
+            package_base_id: 1,
+            version: "1-1".into(),
+            last_modified: now_secs() - 2 * 86_400,
+            ..Package::default()
+        }
+    }
+
+    fn config(current: Vec<Package>) -> Config {
+        let mut config = Config::default();
+        config.min_release_age = Some(Duration::from_secs(86_400));
+        config.raur = Some(Mock::with_packages(current));
+        config
+    }
+
+    #[tokio::test]
+    async fn unchanged_old_release_is_accepted() {
+        let expected = package();
+        let config = config(vec![expected.clone()]);
+        recheck_release_age(&config, std::iter::once(&expected))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn push_without_version_bump_is_rejected() {
+        let expected = package();
+        let mut current = expected.clone();
+        current.last_modified = now_secs();
+        let mut config = config(vec![current]);
+        config.cache.insert(expected.clone().into());
+        let error = recheck_release_age(&config, std::iter::once(&expected))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("pkg"));
+        assert!(error.to_string().contains("minimum release age"));
+    }
+
+    #[tokio::test]
+    async fn changed_metadata_requires_resolving_again() {
+        let expected = package();
+        for field in ["id", "base", "version"] {
+            let mut current = expected.clone();
+            match field {
+                "id" => current.id += 1,
+                "base" => current.package_base = "other".into(),
+                "version" => current.version = "2-1".into(),
+                _ => unreachable!(),
+            }
+            let error = recheck_release_age(&config(vec![current]), std::iter::once(&expected))
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("pkg"));
+            assert!(error.to_string().contains("retry the operation"));
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_fresh_info_does_not_use_cached_package() {
+        let expected = package();
+        let mut config = config(Vec::new());
+        config.cache.insert(expected.clone().into());
+        assert!(
+            recheck_release_age(&config, std::iter::once(&expected))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn disabled_and_exempt_packages_do_not_require_fresh_info() {
+        let mut expected = package();
+        let mut config = config(Vec::new());
+        config.min_release_age = None;
+        recheck_release_age(&config, std::iter::once(&expected))
+            .await
+            .unwrap();
+        config.min_release_age = Some(Duration::from_secs(86_400));
+        config.devel_suffixes = vec!["-git".into()];
+        expected.name = "pkg-git".into();
+        recheck_release_age(&config, std::iter::once(&expected))
+            .await
+            .unwrap();
+    }
 }

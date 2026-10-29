@@ -193,7 +193,7 @@ Server = file://{ROOT}/testdata/db/sync
             elif phase==51 and 'Unmaintained (orphaned)' in view and 'Flagged out-of-date' in view:
                 assert 'aur' in view and '2026-09-16' in view and '[old][orphan]' in view,view
                 Path('/tmp/paru-tui-install-aur.txt').write_text('\n'.join(view.splitlines()[:36]))
-                os.write(fd,b'P');phase=514
+                os.write(fd,b'p');phase=514
             elif phase==514 and 'polybar' not in (root/'config/paru-tui/settings.toml').read_text():
                 assert 'polybar' not in (root/'config/paru-tui/settings.toml').read_text()
                 os.write(fd,b'p');phase=515

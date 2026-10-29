@@ -1,7 +1,7 @@
 use super::{
     catalog::{AurComment, CommentSpan},
     settings::Language,
-    theme::{accent, BLUE, BORDER, MUTED, SURFACE, TEXT, YELLOW},
+    theme::{BLUE, BORDER, MUTED, SURFACE, TEXT, YELLOW, accent},
 };
 use ratatui::{
     style::{Modifier, Style},
@@ -235,14 +235,16 @@ mod tests {
                 .is_some_and(|span| span.style.bg == Some(SURFACE))
         });
         assert!(code.count() >= 3);
-        assert!(layout
-            .lines
-            .iter()
-            .filter(|line| {
-                line.spans
-                    .first()
-                    .is_some_and(|span| span.style.bg == Some(SURFACE))
-            })
-            .all(|line| line.width() == 18));
+        assert!(
+            layout
+                .lines
+                .iter()
+                .filter(|line| {
+                    line.spans
+                        .first()
+                        .is_some_and(|span| span.style.bg == Some(SURFACE))
+                })
+                .all(|line| line.width() == 18)
+        );
     }
 }

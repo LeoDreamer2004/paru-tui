@@ -1,7 +1,7 @@
 //! Cached visible list rows, composed into a clipped pixel viewport for Kitty.
-use ab_glyph::{point, Font, FontArc, FontVec, Glyph, GlyphId, ScaleFont};
-use base64::{engine::general_purpose::STANDARD, Engine};
-use flate2::{write::ZlibEncoder, Compression};
+use ab_glyph::{Font, FontArc, FontVec, Glyph, GlyphId, ScaleFont, point};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use flate2::{Compression, write::ZlibEncoder};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -223,7 +223,7 @@ impl Lists {
             }
             if self.dimmed {
                 let (r, g, b) = rgb(super::theme::BORDER);
-                for pixel in pixels.chunks_exact_mut(4) {
+                for pixel in pixels.as_chunks_mut::<4>().0 {
                     for (k, to) in [r, g, b].into_iter().enumerate() {
                         pixel[k] = (pixel[k] as f32 * 0.3 + to as f32 * 0.7).round() as u8;
                     }
@@ -392,7 +392,7 @@ mod tests {
             let top = ((view.cursor - view.scroll).clamp(0.0, 9.0) * 20.0).round() as u16;
             let mut pixels = [r, g, b, 123].repeat(40 * 200);
             accent_region(&mut pixels, 40, 200, 10, 20, top, 1, 2);
-            for (i, pixel) in pixels.chunks_exact(4).enumerate() {
+            for (i, pixel) in pixels.as_chunks::<4>().0.iter().enumerate() {
                 let (x, y) = (i % 40, i / 40);
                 let inside =
                     (10..30).contains(&x) && (top as usize..top as usize + 20).contains(&y);

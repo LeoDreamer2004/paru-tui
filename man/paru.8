@@ -443,6 +443,24 @@ cache to be refreshed every time, while setting this to -1 will cause the cache
 to never be refreshed. Defaults to 7.
 
 .TP
+.B \-\-minimumreleaseage <duration>
+Refuse to install or upgrade AUR packages modified more recently than this,
+and hide them from AUR search results. The duration is an integer with an
+optional unit suffix (s, m, h, d, w);
+a bare number means days. Applies to dependencies too; devel packages are
+exempt. See
+.B MinimumReleaseAge
+in paru.conf(5).
+
+.TP
+.B \-\-nominimumreleaseage
+Disable the minimum release age check for this run.
+
+.TP
+.B \-\-minimumreleaseageexclude <packages>
+Packages exempt from the minimum release age check. Accepts glob patterns.
+
+.TP
 .B \-\-sortby <votes|popularity|id|baseid|name|base|submitted|modified>
 Sort AUR results by a specific field during search. Defaults to votes.
 
@@ -487,12 +505,16 @@ Don't remove makedepends after installing packages.
 
 .TP
 .B \-\-topdown
-Print search results from top to bottom. Repo packages will print first. This
-is the default.
+Print search results from top to bottom. Repo packages will print first.
 
 .TP
 .B \-\-bottomup
 Print search results from bottom to top. AUR packages will print first.
+
+.TP
+.B \-\-auto
+Use bottom-up ordering in interactive package selection menus and top-down
+ordering for ordinary search and list output. This is the default.
 
 .TP
 .B \-\-limit <limit>
@@ -529,6 +551,12 @@ checked almost instantly and not require the original PKGBUILD to be downloaded.
 
 The slower pacaur-like devel checks can be implemented manually by piping
 a list of packages into paru (see \fBexamples\fR).
+
+Some packages track git sources whose HEAD moves often without changing the
+resulting package version. These will appear as devel updates on every run even
+when rebuilding produces an identical package. See \fBIgnoreDevel\fR and
+\fBIgnoreDevelSource\fR in \fBparu.conf\fR(5) to opt such packages or sources
+out of devel checking.
 
 .TP
 .B \-\-ignoredevel

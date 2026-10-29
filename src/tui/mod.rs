@@ -52,12 +52,17 @@ pub fn entry() -> anyhow::Result<()> {
             args.get(2)
                 .ok_or_else(|| anyhow::anyhow!("Missing worker socket"))?,
         )?;
+        // Apply process environment and locale before Tokio starts its threads.
+        let task = unsafe { crate::run(&args[3..]) };
         let rt = tokio::runtime::Runtime::new()?;
-        let code = rt.block_on(crate::run(&args[3..]));
+        let code = rt.block_on(task);
         std::process::exit(code);
     }
     if args.get(1).is_some_and(|s| s == "--help" || s == "-h") {
-        println!("paru-tui — native package workspace\n\n1 Updates · 2 Install · 3 List · 4 Settings · 5 Activity\nTab/Shift+Tab source/panel · Up/Down package · / search\nu update current source · a update all · p AUR proxy rule\nEnter search/install selected package · o open AUR page\nList: t flat/tree · Left/Right collapse/expand · Enter/Space toggle\nList: d/Delete removal options · Space toggle · Enter review\nTab panel focus · 1–5 pages · r refresh · q quit\n\nSettings: {}", settings::Settings::path()?.display());
+        println!(
+            "paru-tui — native package workspace\n\n1 Updates · 2 Install · 3 List · 4 Settings · 5 Activity\nTab/Shift+Tab source/panel · Up/Down package · / search\nu update current source · a update all · p AUR proxy rule\nEnter search/install selected package · o open AUR page\nList: t flat/tree · Left/Right collapse/expand · Enter/Space toggle\nList: d/Delete removal options · Space toggle · Enter review\nTab panel focus · 1–5 pages · r refresh · q quit\n\nSettings: {}",
+            settings::Settings::path()?.display()
+        );
         return Ok(());
     }
     if args.len() != 1 {

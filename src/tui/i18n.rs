@@ -92,19 +92,36 @@ pub fn translate(text: &str, language: Language) -> String {
         }
     }
     let labels = [
-        ("Use host:port or a complete proxy URL", "请输入主机:端口或完整代理地址"),
-        ("Include a port, for example 127.0.0.1:7890", "请填写端口，例如 127.0.0.1:7890"),
-        ("Configure a proxy URL before enabling proxy rules", "请先配置代理地址，再启用代理规则"),
+        (
+            "Use host:port or a complete proxy URL",
+            "请输入主机:端口或完整代理地址",
+        ),
+        (
+            "Include a port, for example 127.0.0.1:7890",
+            "请填写端口，例如 127.0.0.1:7890",
+        ),
+        (
+            "Configure a proxy URL before enabling proxy rules",
+            "请先配置代理地址，再启用代理规则",
+        ),
         ("Invalid proxy URL", "代理地址无效"),
         ("Invalid paru-tui settings", "paru-tui 配置无效"),
-        ("Use http(s)://host:port or socks5(h)://host:port", "请使用 http(s)://主机:端口 或 socks5(h)://主机:端口"),
-
+        (
+            "Use http(s)://host:port or socks5(h)://host:port",
+            "请使用 http(s)://主机:端口 或 socks5(h)://主机:端口",
+        ),
         ("AUTHENTICATION", "身份验证"),
         ("SELECT GROUP PACKAGES", "选择包组成员"),
-        ("Select group packages (empty = all):", "选择包组成员（留空表示全部）："),
+        (
+            "Select group packages (empty = all):",
+            "选择包组成员（留空表示全部）：",
+        ),
         ("Cancelled by user", "用户已取消操作"),
         ("Transaction cancelled", "事务已取消"),
-        ("Operation running · Ctrl+C interrupts it; q cannot abandon an update", "任务正在运行，按 Ctrl+C 中断后再退出"),
+        (
+            "Operation running · Ctrl+C interrupts it; q cannot abandon an update",
+            "任务正在运行，按 Ctrl+C 中断后再退出",
+        ),
         ("REVIEW CHANGES", "审阅 PKGBUILD 修改"),
         ("REVIEW BUILD FILES", "审阅构建文件"),
         ("SELECT PROVIDER", "选择依赖提供者"),
@@ -117,20 +134,46 @@ pub fn translate(text: &str, language: Language) -> String {
         ("An operation is already running", "已有任务正在运行"),
         ("Accept these changes?", "接受这些修改？"),
         ("Accept these build files?", "接受这些构建文件？"),
-        ("Update the selected source? The final transaction plan will be shown before installation.", "更新所选来源？安装前将显示最终事务计划。"),
-        ("Only this AUR target and its required dependencies will be processed. Other AUR packages are not selected.", "仅处理此 AUR 包及其必要依赖，不更新其他 AUR 包。"),
-        ("Dependencies and the final plan are checked by paru.", "paru 将检查依赖和最终事务计划。"),
+        (
+            "Update the selected source? The final transaction plan will be shown before installation.",
+            "更新所选来源？安装前将显示最终事务计划。",
+        ),
+        (
+            "Only this AUR target and its required dependencies will be processed. Other AUR packages are not selected.",
+            "仅处理此 AUR 包及其必要依赖，不更新其他 AUR 包。",
+        ),
+        (
+            "Dependencies and the final plan are checked by paru.",
+            "paru 将检查依赖和最终事务计划。",
+        ),
         ("Remove conflicting package?", "移除冲突的软件包？"),
-        ("Skip packages with unresolved dependencies?", "跳过依赖无法满足的软件包？"),
+        (
+            "Skip packages with unresolved dependencies?",
+            "跳过依赖无法满足的软件包？",
+        ),
         ("Import signing key?", "导入签名密钥？"),
-        ("Enter updates one AUR package; use u for repository updates", "Enter 更新单个 AUR 包；按 u 更新官方仓库"),
-        ("Proxy rules are available for confirmed AUR package bases", "代理规则仅适用于已确认的 AUR 软件包"),
-        ("Set a proxy URL first, then press p on an AUR package", "请先设置代理地址，再对 AUR 包按 p"),
-        ("Enter saves  Esc discards  Ctrl+U clears", "Enter 保存  Esc 放弃  Ctrl+U 清空"),
-        ("Enter confirm  Esc cancel  PgUp/PgDn read plan", "Enter 确认  Esc 取消  PgUp/PgDn 查看计划"),
+        (
+            "Enter updates one AUR package; use u for repository updates",
+            "Enter 更新单个 AUR 包；按 u 更新官方仓库",
+        ),
+        (
+            "Proxy rules are available for confirmed AUR package bases",
+            "代理规则仅适用于已确认的 AUR 软件包",
+        ),
+        (
+            "Set a proxy URL first, then press p on an AUR package",
+            "请先设置代理地址，再对 AUR 包按 p",
+        ),
+        (
+            "Enter saves  Esc discards  Ctrl+U clears",
+            "Enter 保存  Esc 放弃  Ctrl+U 清空",
+        ),
+        (
+            "Enter confirm  Esc cancel  PgUp/PgDn read plan",
+            "Enter 确认  Esc 取消  PgUp/PgDn 查看计划",
+        ),
         ("sudo: a password is required", "sudo 需要密码"),
         ("Sorry, try again.", "密码错误，请重试。"),
-
         ("Scanning packages", "正在扫描软件包"),
         ("Scan complete", "扫描完成"),
         ("Git update check failed:", "Git 更新检查失败："),
@@ -155,8 +198,14 @@ pub fn translate(text: &str, language: Language) -> String {
         ("SEARCH · AUR…", "搜索 · AUR…"),
         ("SEARCH RESULTS", "搜索结果"),
         ("Searching packages…", "正在搜索软件包…"),
-        ("Build output appears here while a package is built.", "软件包构建时将在此显示输出。"),
-        ("Press / to search by name or description", "按 / 输入名称或描述，再按 Enter 搜索"),
+        (
+            "Build output appears here while a package is built.",
+            "软件包构建时将在此显示输出。",
+        ),
+        (
+            "Press / to search by name or description",
+            "按 / 输入名称或描述，再按 Enter 搜索",
+        ),
         ("AUR search timed out", "AUR 搜索超时"),
         ("AUR package no longer exists", "AUR 软件包已不存在"),
         ("AUR lookup timed out", "AUR 来源识别超时"),
@@ -179,13 +228,34 @@ pub fn translate(text: &str, language: Language) -> String {
         ("AUR / COMMUNITY", "AUR / 社区仓库"),
         ("SETTINGS", "设置"),
         ("CLEAN PACKAGE CACHE", "清理软件包缓存"),
-        ("PKGBUILD is available for AUR packages only", "只有 AUR 软件包可以查看 PKGBUILD"),
-        ("Do you want to remove ALL files from cache?", "要删除缓存中的所有文件吗？"),
-        ("Do you want to remove unused repositories?", "要删除不再使用的仓库数据库吗？"),
-        ("Do you want to clean ALL AUR packages from cache?", "要清理缓存中的全部 AUR 软件包吗？"),
-        ("Do you want to clean all other AUR packages from cache?", "要清理缓存中的其他 AUR 软件包吗？"),
-        ("Do you want to remove all saved diffs?", "要删除所有已保存的差异文件吗？"),
-        ("Start paru -Scc? pacman will separately ask about removing cached packages and unused repository databases; paru will then ask about AUR clones and saved diffs.", "开始执行 paru -Scc？pacman 会分别询问是否删除缓存软件包和无用仓库数据库；随后 paru 会询问是否清理 AUR 克隆与已保存的差异。"),
+        (
+            "PKGBUILD is available for AUR packages only",
+            "只有 AUR 软件包可以查看 PKGBUILD",
+        ),
+        (
+            "Do you want to remove ALL files from cache?",
+            "要删除缓存中的所有文件吗？",
+        ),
+        (
+            "Do you want to remove unused repositories?",
+            "要删除不再使用的仓库数据库吗？",
+        ),
+        (
+            "Do you want to clean ALL AUR packages from cache?",
+            "要清理缓存中的全部 AUR 软件包吗？",
+        ),
+        (
+            "Do you want to clean all other AUR packages from cache?",
+            "要清理缓存中的其他 AUR 软件包吗？",
+        ),
+        (
+            "Do you want to remove all saved diffs?",
+            "要删除所有已保存的差异文件吗？",
+        ),
+        (
+            "Start paru -Scc? pacman will separately ask about removing cached packages and unused repository databases; paru will then ask about AUR clones and saved diffs.",
+            "开始执行 paru -Scc？pacman 会分别询问是否删除缓存软件包和无用仓库数据库；随后 paru 会询问是否清理 AUR 克隆与已保存的差异。",
+        ),
         ("SEARCH", "搜索"),
         ("NOTICE", "通知"),
         ("ERROR", "错误"),
@@ -201,8 +271,14 @@ pub fn translate(text: &str, language: Language) -> String {
         ("REMOVE PACKAGE", "删除软件包"),
         ("REMOVAL PLAN", "确认删除清单"),
         ("Remove the prepared packages?", "确认删除以下软件包？"),
-        ("Remove only the selected package.", "仅删除当前选中的软件包。"),
-        ("The final removal plan will be shown before any packages are removed.", "实际删除前将展示完整的删除清单。"),
+        (
+            "Remove only the selected package.",
+            "仅删除当前选中的软件包。",
+        ),
+        (
+            "The final removal plan will be shown before any packages are removed.",
+            "实际删除前将展示完整的删除清单。",
+        ),
         ("BACKEND REQUEST", "操作确认 / 输入"),
         ("DEPENDENCIES", "依赖项"),
         ("Architecture", "架构"),
@@ -271,10 +347,11 @@ pub fn translate(text: &str, language: Language) -> String {
             return text.replacen(en, zh, 1);
         }
         // Panel counts have a numeric suffix; do not translate arbitrary package content.
-        if let Some(suffix) = trimmed.strip_prefix(en) {
-            if !suffix.trim().is_empty() && suffix.trim().parse::<usize>().is_ok() {
-                return text.replacen(en, zh, 1);
-            }
+        if let Some(suffix) = trimmed.strip_prefix(en)
+            && !suffix.trim().is_empty()
+            && suffix.trim().parse::<usize>().is_ok()
+        {
+            return text.replacen(en, zh, 1);
         }
     }
     let phrases = [

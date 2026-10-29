@@ -1,7 +1,7 @@
 //! A solid selection rectangle underneath text, positioned in Kitty pixel coordinates.
-use base64::{engine::general_purpose::STANDARD, Engine};
-use crossterm::terminal::{window_size, WindowSize};
-use flate2::{write::ZlibEncoder, Compression};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use crossterm::terminal::{WindowSize, window_size};
+use flate2::{Compression, write::ZlibEncoder};
 use ratatui::{layout::Rect, style::Color};
 use std::io::{self, Write};
 
@@ -304,13 +304,15 @@ mod tests {
     }
     #[test]
     fn missing_pixel_size_falls_back_and_rectangle_stays_inside_list() {
-        assert!(cell_size(WindowSize {
-            rows: 36,
-            columns: 140,
-            width: 0,
-            height: 0
-        })
-        .is_none());
+        assert!(
+            cell_size(WindowSize {
+                rows: 36,
+                columns: 140,
+                width: 0,
+                height: 0
+            })
+            .is_none()
+        );
         let mut layer = SelectionLayer {
             cell: Some((10, 20)),
             ..Default::default()

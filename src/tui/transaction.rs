@@ -6,14 +6,14 @@ use crate::{
     config::Config,
     exec::{self, Status},
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::{Debug, Display},
     process::Command,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
@@ -506,9 +506,18 @@ fn run(request: &Request) -> Result<()> {
             }
         }
         let text = if matches!(request.operation.as_str(), "remove" | "R") {
-            format!("Remove the prepared packages?\n\nPackages to remove: {}\nFreed disk space: {:.2} MiB", plan.len(), old as f64 / 1048576.)
+            format!(
+                "Remove the prepared packages?\n\nPackages to remove: {}\nFreed disk space: {:.2} MiB",
+                plan.len(),
+                old as f64 / 1048576.
+            )
         } else {
-            format!("Install the prepared transaction?\n\nDownload size: {:.2} MiB\nInstalled size: {:.2} MiB\nNet change: {:.2} MiB",download as f64/1048576.,installed as f64/1048576.,(installed-old) as f64/1048576.)
+            format!(
+                "Install the prepared transaction?\n\nDownload size: {:.2} MiB\nInstalled size: {:.2} MiB\nNet change: {:.2} MiB",
+                download as f64 / 1048576.,
+                installed as f64 / 1048576.,
+                (installed - old) as f64 / 1048576.
+            )
         };
         let prompt = Question {
             text,
@@ -604,11 +613,12 @@ fn question(mut raw: alpm::AnyQuestion, cancelled: &mut Arc<AtomicBool>) {
                 };
                 match bridge::try_request(&prompt) {
                     Ok(value) => {
-                        if let Ok(i) = value.trim().parse::<usize>() {
-                            if i > 0 && i <= choices.len() {
-                                q.set_index((i - 1) as i32);
-                                break;
-                            }
+                        if let Ok(i) = value.trim().parse::<usize>()
+                            && i > 0
+                            && i <= choices.len()
+                        {
+                            q.set_index((i - 1) as i32);
+                            break;
                         }
                     }
                     Err(_) => {

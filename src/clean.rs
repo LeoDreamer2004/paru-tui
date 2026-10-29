@@ -5,14 +5,14 @@ use crate::print_error;
 use crate::printtr;
 use crate::util::ask;
 
-use std::fs::{read_dir, remove_dir_all, remove_file, set_permissions, DirEntry};
+use std::fs::{DirEntry, read_dir, remove_dir_all, remove_file, set_permissions};
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 
 use alpm_utils::DbListExt;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use srcinfo::Srcinfo;
 use tr::tr;
 
@@ -50,25 +50,24 @@ pub fn clean(config: &Config) -> Result<()> {
 
         printtr!("Clone Directory: {}", config.fetch.clone_dir.display());
 
-        if ask(config, &question, !remove_all) {
-            if let Some(message) = record_failure(
+        if ask(config, &question, !remove_all)
+            && let Some(message) = record_failure(
                 &mut failures,
                 "AUR clone cleanup",
                 clean_aur(config, keep_installed, keep_current, remove_all, rm),
-            )? {
-                report_failure(config, message);
-            }
+            )?
+        {
+            report_failure(config, message);
         }
 
         printtr!("\nDiff Directory: {}", config.fetch.diff_dir.display());
 
         let question = tr!("Do you want to remove all saved diffs?");
-        if ask(config, &question, true) {
-            if let Some(message) =
+        if ask(config, &question, true)
+            && let Some(message) =
                 record_failure(&mut failures, "Saved diff cleanup", clean_diff(config))?
-            {
-                report_failure(config, message);
-            }
+        {
+            report_failure(config, message);
         }
     }
 
@@ -216,10 +215,10 @@ fn clean_aur_pkg(
         if keep_installed {
             let local_db = config.alpm.localdb();
             for pkg in &srcinfo.pkgs {
-                if let Ok(pkg) = local_db.pkg(&*pkg.pkgname) {
-                    if pkg.version().as_str() == srcinfo.version() {
-                        return Ok(());
-                    }
+                if let Ok(pkg) = local_db.pkg(&*pkg.pkgname)
+                    && pkg.version().as_str() == srcinfo.version()
+                {
+                    return Ok(());
                 }
             }
         }
@@ -227,10 +226,10 @@ fn clean_aur_pkg(
         if keep_current {
             for pkg in &srcinfo.pkgs {
                 let sync_dbs = config.alpm.syncdbs();
-                if let Ok(pkg) = sync_dbs.pkg(&*pkg.pkgname) {
-                    if pkg.version().as_str() == srcinfo.version() {
-                        return Ok(());
-                    }
+                if let Ok(pkg) = sync_dbs.pkg(&*pkg.pkgname)
+                    && pkg.version().as_str() == srcinfo.version()
+                {
+                    return Ok(());
                 }
             }
         }
@@ -284,9 +283,11 @@ mod tests {
         )
         .unwrap();
         assert!(first.unwrap().contains("permission denied"));
-        assert!(record_failure(&mut failures, "AUR clone cleanup", Ok(()))
-            .unwrap()
-            .is_none());
+        assert!(
+            record_failure(&mut failures, "AUR clone cleanup", Ok(()))
+                .unwrap()
+                .is_none()
+        );
         let last = record_failure(
             &mut failures,
             "Saved diff cleanup",
