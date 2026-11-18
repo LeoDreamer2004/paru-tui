@@ -1,10 +1,10 @@
-use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::env::var;
 use std::ffi::OsStr;
 use std::fmt::Write as _;
-use std::fs::{OpenOptions, read_dir, read_link};
+use std::fs::{OpenOptions, read_link, symlink_metadata};
 use std::io::{BufRead, Read, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::Ordering;
@@ -17,13 +17,15 @@ use crate::config::{Config, LocalRepos, Mode, Op, Sign, YesNoAllTree, YesNoAsk};
 use crate::devel::{DevelInfo, fetch_devel_info, load_devel_info, save_devel_info};
 use crate::download::{self, Bases};
 use crate::exec::{command_status, has_command};
-use crate::fmt::{print_indent, print_install, print_install_verbose};
+use crate::fmt::{
+    escape_control, escape_control_multiline, print_indent, print_install, print_install_verbose,
+};
 use crate::keys::check_pgp_keys;
 use crate::pkgbuild::PkgbuildRepo;
 use crate::resolver::{flags, resolver};
 use crate::upgrade::{Upgrades, get_upgrades};
 use crate::util::{ask, now_secs, repo_aur_pkgs, split_repo_aur_targets};
-use crate::{args, exec, news, print_error, printtr, repo};
+use crate::{args, config, exec, news, print_error, printtr, repo};
 
 use alpm::{Alpm, Depend, Version};
 use alpm_utils::depends::{satisfies, satisfies_nover, satisfies_provide, satisfies_provide_nover};
@@ -192,22 +194,31 @@ impl Installer {
         download::new_aur_pkgbuilds(config, bases, &self.srcinfos).await?;
 
         for base in &bases.bases {
-            if self.srcinfos.contains_key(base.package_base()) {
-                continue;
-            }
             let path = config.build_dir.join(base.package_base()).join(".SRCINFO");
             if path.exists() {
-                if let Entry::Vacant(vacant) = self.srcinfos.entry(base.package_base().to_string())
-                {
-                    let srcinfo = Srcinfo::from_path(path)
-                        .with_context(|| tr!("failed to parse srcinfo for '{}'", base))?;
-                    vacant.insert(srcinfo);
-                }
+                let srcinfo = Srcinfo::from_path(path)
+                    .with_context(|| tr!("failed to parse srcinfo for '{}'", base))?;
+                self.srcinfos
+                    .insert(base.package_base().to_string(), srcinfo);
             } else {
                 bail!(tr!("could not find .SRCINFO for '{}'", base.package_base()));
             }
         }
         Ok(())
+    }
+
+    fn set_conflict_ask<'a>(args: &mut Args<&'a str>, ask: &'a mut String) {
+        if let Some(arg) = args.args.iter_mut().find(|a| a.key == "ask") {
+            let num = arg.value.unwrap_or_default();
+            let mut num = num.parse::<i32>().unwrap_or_default();
+            num |= alpm::QuestionType::ConflictPkg as i32;
+            *ask = num.to_string();
+            arg.value = Some(ask.as_str());
+        } else {
+            let value = alpm::QuestionType::ConflictPkg as i32;
+            *ask = value.to_string();
+            args.push_value("ask", ask.as_str());
+        }
     }
 
     fn chroot_install(&self, config: &Config, build: &[Base], repo_targs: &[String]) -> Result<()> {
@@ -269,7 +280,7 @@ impl Installer {
             }
 
             args.targets = targets;
-            let ask;
+            let mut ask = String::new();
 
             if !self.built.is_empty()
                 && (!config.args.has_arg("u", "sysupgrade")
@@ -278,17 +289,7 @@ impl Installer {
             {
                 if self.conflict {
                     if config.use_ask {
-                        if let Some(arg) = args.args.iter_mut().find(|a| a.key == "ask") {
-                            let num = arg.value.unwrap_or_default();
-                            let mut num = num.parse::<i32>().unwrap_or_default();
-                            num |= alpm::QuestionType::ConflictPkg as i32;
-                            ask = num.to_string();
-                            arg.value = Some(ask.as_str());
-                        } else {
-                            let value = alpm::QuestionType::ConflictPkg as i32;
-                            ask = value.to_string();
-                            args.push_value("ask", ask.as_str());
-                        }
+                        Self::set_conflict_ask(&mut args, &mut ask);
                     }
                 } else {
                     args.arg("noconfirm");
@@ -364,7 +365,7 @@ impl Installer {
     fn do_install(&mut self, config: &Config) -> Result<()> {
         if !self.install_queue.is_empty() {
             let mut args = config.pacman_globals();
-            let ask;
+            let mut ask = String::new();
             args.op("upgrade");
             copy_sync_args(config, &mut args);
 
@@ -374,17 +375,7 @@ impl Installer {
 
             if self.conflict {
                 if config.use_ask {
-                    if let Some(arg) = args.args.iter_mut().find(|a| a.key == "ask") {
-                        let num = arg.value.unwrap_or_default();
-                        let mut num = num.parse::<i32>().unwrap_or_default();
-                        num |= alpm::QuestionType::ConflictPkg as i32;
-                        ask = num.to_string();
-                        arg.value = Some(ask.as_str());
-                    } else {
-                        let value = alpm::QuestionType::ConflictPkg as i32;
-                        ask = value.to_string();
-                        args.push_value("ask", ask.as_str());
-                    }
+                    Self::set_conflict_ask(&mut args, &mut ask);
                 }
             } else {
                 args.arg("noconfirm");
@@ -533,8 +524,6 @@ impl Installer {
     ) -> Result<(HashMap<String, String>, String)> {
         let c = config.color;
         let pkgdest = repo.map(|r| r.1);
-        let mut env = config.env.clone();
-        env.extend(pkgdest.map(|p| ("PKGDEST".to_string(), p.to_string())));
 
         if config.chroot {
             let mut extra = Vec::new();
@@ -584,6 +573,27 @@ impl Installer {
         if needs_build {
             // actual build
             if config.chroot {
+                let mut destinations = base
+                    .packages()
+                    .filter_map(|pkg| pkgdests.get(pkg))
+                    .map(|path| Path::new(path).parent());
+                let output_dir = destinations
+                    .next()
+                    .flatten()
+                    .context("package list is empty")?;
+                ensure!(
+                    destinations.all(|dest| dest == Some(output_dir)),
+                    "{}",
+                    tr!("package list contains different output directories")
+                );
+                let mut env = config.env.clone();
+                env.push((
+                    "PKGDEST".to_string(),
+                    output_dir
+                        .to_str()
+                        .context("pkgdest is not utf8")?
+                        .to_string(),
+                ));
                 let mut extra = Vec::new();
                 if config.repos == LocalRepos::None {
                     extra.extend(self.built.iter().map(|s| s.as_str()));
@@ -645,6 +655,16 @@ impl Installer {
         self.built.extend(to_install);
     }
 
+    fn sync_devel_info(&mut self, base: &Base) {
+        if let Some(info) = self.new_devel_info.info.remove(base.package_base()) {
+            self.devel_info
+                .info
+                .insert(base.package_base().to_string(), info);
+        } else {
+            self.devel_info.info.remove(base.package_base());
+        }
+    }
+
     fn add_pkg(
         &mut self,
         config: &mut Config,
@@ -678,13 +698,7 @@ impl Installer {
                 repo::add(config, path, name, &paths)?;
                 repo::refresh(config, &[name])?;
             }
-            if let Some(info) = self.new_devel_info.info.remove(base.package_base()) {
-                self.devel_info
-                    .info
-                    .insert(base.package_base().to_string(), info);
-            } else {
-                self.devel_info.info.remove(base.package_base());
-            }
+            self.sync_devel_info(base);
             if config.devel {
                 save_devel_info(config, &self.devel_info)?;
             }
@@ -821,13 +835,7 @@ impl Installer {
         }
 
         if repo.is_none() {
-            if let Some(info) = self.new_devel_info.info.remove(base.package_base()) {
-                self.devel_info
-                    .info
-                    .insert(base.package_base().to_string(), info);
-            } else {
-                self.devel_info.info.remove(base.package_base());
-            }
+            self.sync_devel_info(base);
         }
 
         Ok(())
@@ -946,6 +954,11 @@ impl Installer {
         repo_targets: &[Targ<'a>],
         aur_targets: &[Targ<'a>],
     ) -> Result<()> {
+        if (config.mode.aur() || config.mode.pkgbuild())
+            && (self.sysupgrade != 0 || !aur_targets.is_empty())
+        {
+            config.pkgbuild_repos.ensure_reviewed(config)?;
+        }
         let mut cache = Cache::new();
         let flags = flags(config);
         let c = config.color;
@@ -1145,6 +1158,20 @@ impl Installer {
         self.download_pkgbuilds(config, &bases).await?;
         recheck_release_age(config, actions.iter_aur_pkgs().map(|p| &*p.pkg)).await?;
 
+        if !config.skip_review {
+            let pkgs = actions
+                .build
+                .iter()
+                .filter(|b| b.build())
+                .filter_map(|b| match b {
+                    Base::Aur(pkg) => Some(pkg.package_base()),
+                    Base::Pkgbuild(_) => None,
+                })
+                .collect::<Vec<_>>();
+            let reviewed = review(config, &config.fetch, &pkgs, false)?;
+            mark_reviewed(&config.fetch, &reviewed)?;
+        }
+
         for pkg in &actions.build {
             match pkg {
                 Base::Aur(base) => {
@@ -1162,19 +1189,6 @@ impl Installer {
                     pre_build_command(config, dir, c.package_base(), &c.version())?;
                 }
             }
-        }
-
-        if !config.skip_review {
-            let pkgs = actions
-                .build
-                .iter()
-                .filter(|b| b.build())
-                .filter_map(|b| match b {
-                    Base::Aur(pkg) => Some(pkg.package_base()),
-                    Base::Pkgbuild(_) => None,
-                })
-                .collect::<Vec<_>>();
-            review(config, &config.fetch, &pkgs)?;
         }
 
         let arch = config
@@ -1443,6 +1457,26 @@ fn fmt_stack(want: &DepMissing) -> String {
     }
 }
 
+fn print_conflicts(c: config::Colors, conflicts: &[Conflict], title: &str) {
+    if !conflicts.is_empty() {
+        eprintln!("{} {}", c.error.paint("::"), c.bold.paint(title));
+
+        for conflict in conflicts {
+            eprint!("    {}: ", conflict.pkg);
+
+            for conflict in &conflict.conflicting {
+                eprint!("{}", conflict.pkg);
+                if let Some(conflict) = &conflict.conflict {
+                    eprint!(" ({})", conflict);
+                }
+                eprint!("  ");
+            }
+            eprintln!();
+        }
+        eprintln!();
+    }
+}
+
 fn check_actions(
     config: &Config,
     actions: &mut Actions,
@@ -1486,24 +1520,57 @@ fn check_actions(
         );
     }
 
+    let build_only_targets = if install_targets {
+        None
+    } else {
+        let mut build_only_targets = HashSet::new();
+
+        for base in &actions.build {
+            match base {
+                Base::Aur(base) => build_only_targets.extend(
+                    base.pkgs
+                        .iter()
+                        .filter(|pkg| pkg.target)
+                        .map(|pkg| pkg.pkg.name.clone()),
+                ),
+                Base::Pkgbuild(base) => build_only_targets.extend(
+                    base.pkgs
+                        .iter()
+                        .filter(|pkg| pkg.target)
+                        .map(|pkg| pkg.pkg.pkgname.clone()),
+                ),
+            }
+        }
+
+        // Installed copies of build-only targets stay installed, so their conflicts still matter
+        build_only_targets.retain(|pkg| config.alpm.localdb().pkg(pkg.as_str()).is_err());
+
+        Some(build_only_targets)
+    };
+
+    let filter_build_only_targets = |conflicts: &mut Vec<Conflict>| {
+        if let Some(build_only_targets) = build_only_targets.as_ref() {
+            conflicts.retain_mut(|conflict| {
+                if build_only_targets.contains(&conflict.pkg) {
+                    return false;
+                }
+
+                conflict
+                    .conflicting
+                    .retain(|pkg| !build_only_targets.contains(&pkg.pkg));
+                !conflict.conflicting.is_empty()
+            });
+        }
+    };
+
     let conflicts = if !config.chroot || install_targets {
         println!(
             "{} {}",
             c.action.paint("::"),
             c.bold.paint(tr!("Calculating conflicts..."))
         );
-        // Hack to ignore conflicts on -B
-        // Only ignores conflicts for the last package instead of all targets
-        // As in theory one target could depend on another and thus must be installed
         let mut conflicts = actions.calculate_conflicts(!config.chroot);
-        if !install_targets && let Some(build) = actions.build.last() {
-            let pkgs = build.packages().map(|s| s.to_string()).collect::<Vec<_>>();
-            conflicts.retain(|c| {
-                !c.conflicting
-                    .iter()
-                    .all(|conflicting| pkgs.contains(&conflicting.pkg))
-            });
-        }
+        filter_build_only_targets(&mut conflicts);
         conflicts
     } else {
         Vec::new()
@@ -1513,55 +1580,16 @@ fn check_actions(
         c.action.paint("::"),
         c.bold.paint(tr!("Calculating inner conflicts..."))
     );
-    let inner_conflicts = actions.calculate_inner_conflicts(!config.chroot);
+    let mut inner_conflicts = actions.calculate_inner_conflicts(!config.chroot);
+    filter_build_only_targets(&mut inner_conflicts);
 
     if !conflicts.is_empty() || !inner_conflicts.is_empty() {
         eprintln!();
     }
 
-    if !inner_conflicts.is_empty() {
-        eprintln!(
-            "{} {}",
-            c.error.paint("::"),
-            c.bold.paint(tr!("Inner conflicts found:"))
-        );
+    print_conflicts(c, &inner_conflicts, tr!("Inner conflicts found:").as_str());
 
-        for conflict in &inner_conflicts {
-            eprint!("    {}: ", conflict.pkg);
-
-            for conflict in &conflict.conflicting {
-                eprint!("{}", conflict.pkg);
-                if let Some(conflict) = &conflict.conflict {
-                    eprint!(" ({})", conflict);
-                }
-                eprint!("  ");
-            }
-            eprintln!();
-        }
-        eprintln!();
-    }
-
-    if !conflicts.is_empty() {
-        eprintln!(
-            "{} {}",
-            c.error.paint("::"),
-            c.bold.paint(tr!("Conflicts found:"))
-        );
-
-        for conflict in &conflicts {
-            eprint!("    {}: ", conflict.pkg);
-
-            for conflict in &conflict.conflicting {
-                eprint!("{}", conflict.pkg);
-                if let Some(conflict) = &conflict.conflict {
-                    eprint!(" ({})", conflict);
-                }
-                eprint!("  ");
-            }
-            eprintln!();
-        }
-        eprintln!();
-    }
+    print_conflicts(c, &conflicts, tr!("Conflicts found:").as_str());
 
     if (!conflicts.is_empty() || !inner_conflicts.is_empty()) && !config.use_ask {
         eprintln!(
@@ -1682,16 +1710,401 @@ fn pre_build_command(config: &Config, dir: &Path, base: &str, version: &str) -> 
     Ok(())
 }
 
+pub(crate) struct ReviewedRepo {
+    name: String,
+    head: String,
+    upstream: Option<String>,
+    fork_point: Option<String>,
+    seen: Option<(String, String)>,
+    tree: String,
+}
+
+impl ReviewedRepo {
+    fn changed(&self) -> bool {
+        self.seen
+            .as_ref()
+            .is_none_or(|(_, tree)| tree != &self.tree)
+    }
+}
+
+fn review_command(fetch: &aur_fetch::Fetch, pkg: &str, args: &[&str]) -> Command {
+    let mut cmd = Command::new(&fetch.git);
+    cmd.current_dir(fetch.clone_dir.join(pkg))
+        .args(&fetch.git_flags)
+        .args(["-c", "core.warnAmbiguousRefs=false"])
+        .args(args);
+    cmd
+}
+
+fn review_git(fetch: &aur_fetch::Fetch, pkg: &str, args: &[&str]) -> Result<std::process::Output> {
+    exec::command_output(&mut review_command(fetch, pkg, args))
+}
+
+fn review_fork_point(fetch: &aur_fetch::Fetch, pkg: &str, head: &str) -> Result<Option<String>> {
+    let config = review_git(
+        fetch,
+        pkg,
+        &[
+            "config",
+            "--bool",
+            "--default=true",
+            "--get",
+            "rebase.forkPoint",
+        ],
+    )?;
+    if std::str::from_utf8(&config.stdout)?.trim() == "false" {
+        return Ok(None);
+    }
+    let output = review_command(
+        fetch,
+        pkg,
+        &["merge-base", "--fork-point", "HEAD@{u}", head],
+    )
+    .output()?;
+    if output.status.code() == Some(1) && output.stdout.is_empty() {
+        return Ok(None);
+    }
+    ensure!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    let point = std::str::from_utf8(&output.stdout)?.trim();
+    ensure!(!point.is_empty(), "missing fork point");
+    Ok(Some(point.to_owned()))
+}
+
+fn merged_tree(
+    fetch: &aur_fetch::Fetch,
+    pkg: &str,
+    head: &str,
+    upstream: &str,
+    fork_point: Option<&str>,
+) -> Result<String> {
+    let base = fork_point.map(|point| format!("--merge-base={point}"));
+    let mut args = vec!["merge-tree", "--write-tree"];
+    if let Some(base) = &base {
+        args.push(base);
+    }
+    args.extend([head, upstream]);
+    let output = review_git(fetch, pkg, &args)?;
+    Ok(std::str::from_utf8(&output.stdout)?.trim().to_owned())
+}
+
+fn review_plan(fetch: &aur_fetch::Fetch, pkgs: &[&str], merge: bool) -> Result<Vec<ReviewedRepo>> {
+    let seen = seen_repos(fetch, pkgs);
+    pkgs.iter()
+        .map(|&pkg| {
+            let mut args = vec!["rev-parse", "HEAD^{commit}", "HEAD^{tree}"];
+            if merge {
+                args.push("HEAD@{u}^{commit}");
+            }
+            if seen.contains(&pkg) {
+                args.extend([
+                    "AUR_SEEN^{commit}",
+                    "AUR_SEEN^{tree}",
+                    "--symbolic-full-name",
+                    "AUR_SEEN",
+                ]);
+            }
+            let output = review_git(fetch, pkg, &args)?;
+            let mut refs = std::str::from_utf8(&output.stdout)?.lines();
+            let head = refs.next().context("missing HEAD")?.to_owned();
+            let mut tree = refs.next().context("missing HEAD tree")?.to_owned();
+            let upstream = if merge {
+                Some(refs.next().context("missing upstream")?.to_owned())
+            } else {
+                None
+            };
+            let seen = if seen.contains(&pkg) {
+                let commit = refs.next().context("missing review marker")?.to_owned();
+                let tree = refs.next().context("missing reviewed tree")?.to_owned();
+                ensure!(refs.next() == Some("AUR_SEEN"), "invalid review marker");
+                Some((commit, tree))
+            } else {
+                None
+            };
+            ensure!(refs.next().is_none(), "unexpected review references");
+            let fork_point = if merge {
+                review_fork_point(fetch, pkg, &head)?
+            } else {
+                None
+            };
+            if let Some(upstream) = &upstream {
+                tree = merged_tree(fetch, pkg, &head, upstream, fork_point.as_deref())?;
+            }
+            Ok(ReviewedRepo {
+                name: pkg.to_owned(),
+                head,
+                upstream,
+                fork_point,
+                seen,
+                tree,
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn mark_reviewed(fetch: &aur_fetch::Fetch, repos: &[ReviewedRepo]) -> Result<()> {
+    let mut heads = Vec::new();
+    for repo in repos {
+        let output = review_git(
+            fetch,
+            &repo.name,
+            &["rev-parse", "HEAD^{commit}", "HEAD^{tree}"],
+        )?;
+        let mut refs = std::str::from_utf8(&output.stdout)?.lines();
+        let head = refs.next().context("missing HEAD")?.to_owned();
+        ensure!(
+            refs.next() == Some(repo.tree.as_str()) && refs.next().is_none(),
+            tr!("repo {} changed after review; review it again", repo.name)
+        );
+        heads.push(head);
+    }
+    for (repo, head) in repos.iter().zip(heads) {
+        review_git(
+            fetch,
+            &repo.name,
+            &["update-ref", "--no-deref", "AUR_SEEN", &head],
+        )?;
+    }
+    Ok(())
+}
+
+pub(crate) fn merge_reviewed(
+    fetch: &aur_fetch::Fetch,
+    repos: &[ReviewedRepo],
+    pkgs: &[&str],
+) -> Result<()> {
+    let names = repos
+        .iter()
+        .map(|repo| repo.name.as_str())
+        .collect::<Vec<_>>();
+    let seen = seen_repos(fetch, &names);
+    for repo in repos {
+        let output = review_git(fetch, &repo.name, &["rev-parse", "HEAD"])?;
+        ensure!(
+            std::str::from_utf8(&output.stdout)?.trim() == repo.head
+                && seen.contains(&repo.name.as_str()) == repo.seen.is_some(),
+            tr!("repo {} changed after review; review it again", repo.name)
+        );
+    }
+    for repo in repos {
+        if let Some((seen, _)) = &repo.seen {
+            review_git(
+                fetch,
+                &repo.name,
+                &["update-ref", "--no-deref", "-d", "AUR_SEEN", seen],
+            )?;
+        }
+    }
+    for &pkg in pkgs {
+        if let Some(repo) = repos.iter().find(|repo| repo.name == pkg) {
+            let upstream = repo
+                .upstream
+                .as_deref()
+                .context("missing reviewed upstream")?;
+            review_git(fetch, pkg, &["reset", "--hard", "-q", &repo.head])?;
+            review_git(
+                fetch,
+                pkg,
+                &[
+                    "rebase",
+                    "--stat",
+                    "--no-fork-point",
+                    "--onto",
+                    upstream,
+                    repo.fork_point.as_deref().unwrap_or(upstream),
+                ],
+            )?;
+        } else {
+            fetch.merge(&[pkg])?;
+        }
+    }
+    mark_reviewed(fetch, repos)
+}
+
+fn update_review_head(fetch: &aur_fetch::Fetch, repo: &mut ReviewedRepo, head: &str) -> Result<()> {
+    repo.tree = if let Some(upstream) = &repo.upstream {
+        merged_tree(
+            fetch,
+            &repo.name,
+            head,
+            upstream,
+            repo.fork_point.as_deref(),
+        )?
+    } else {
+        let output = review_git(
+            fetch,
+            &repo.name,
+            &["rev-parse", &format!("{head}^{{tree}}")],
+        )?;
+        std::str::from_utf8(&output.stdout)?.trim().to_owned()
+    };
+    repo.head = head.to_owned();
+    Ok(())
+}
+
+fn review_is_ancestor(fetch: &aur_fetch::Fetch, pkg: &str, base: &str, head: &str) -> Result<bool> {
+    let output =
+        review_command(fetch, pkg, &["merge-base", "--is-ancestor", base, head]).output()?;
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => bail!("{}", String::from_utf8_lossy(&output.stderr).trim()),
+    }
+}
+
+fn file_manager_changes(fetch: &aur_fetch::Fetch, repos: &mut [ReviewedRepo]) -> Result<()> {
+    for repo in repos {
+        let output = review_git(fetch, &repo.name, &["rev-parse", "HEAD^{commit}"])?;
+        let head = std::str::from_utf8(&output.stdout)?.trim();
+        if head != repo.head {
+            if let Some(upstream) = &repo.upstream {
+                if let Some(fork_point) = &repo.fork_point
+                    && review_is_ancestor(fetch, &repo.name, head, fork_point)?
+                {
+                    repo.fork_point = Some(head.to_owned());
+                } else if review_is_ancestor(fetch, &repo.name, upstream, head)?
+                    && match &repo.fork_point {
+                        None => true,
+                        Some(fork_point) => {
+                            review_is_ancestor(fetch, &repo.name, fork_point, upstream)?
+                                || !review_is_ancestor(fetch, &repo.name, fork_point, head)?
+                        }
+                    }
+                {
+                    repo.fork_point = Some(upstream.clone());
+                }
+            }
+            update_review_head(fetch, repo, head)?;
+        }
+    }
+    Ok(())
+}
+
+fn save_review_changes(fetch: &aur_fetch::Fetch, repos: &mut [ReviewedRepo]) -> Result<()> {
+    for repo in repos.iter() {
+        let output = review_git(fetch, &repo.name, &["rev-parse", "HEAD"])?;
+        ensure!(
+            std::str::from_utf8(&output.stdout)?.trim() == repo.head,
+            tr!("repo {} changed after review; review it again", repo.name)
+        );
+    }
+    let names = repos.iter().map(|r| r.name.as_str()).collect::<Vec<_>>();
+    fetch.commit(&names, "paru save changes")?;
+    for repo in repos {
+        let output = review_git(
+            fetch,
+            &repo.name,
+            &["rev-list", "--parents", "-n", "1", "HEAD"],
+        )?;
+        let refs = std::str::from_utf8(&output.stdout)?
+            .split_whitespace()
+            .collect::<Vec<_>>();
+        let head = refs.first().context("missing saved commit")?;
+        if *head == repo.head {
+            continue;
+        }
+        ensure!(
+            refs.len() == 2 && refs[1] == repo.head,
+            tr!("repo {} changed after review; review it again", repo.name)
+        );
+        update_review_head(fetch, repo, head)?;
+    }
+    Ok(())
+}
+
+fn review_diffs(fetch: &aur_fetch::Fetch, repos: &[&ReviewedRepo]) -> Result<Vec<String>> {
+    repos
+        .iter()
+        .map(|repo| {
+            let git = |args: &[&str]| review_git(fetch, &repo.name, args);
+            let seen = repo
+                .seen
+                .as_ref()
+                .context("missing review marker")?
+                .0
+                .as_str();
+            let tree = repo.tree.as_str();
+            let target = repo.upstream.as_deref().unwrap_or(&repo.head);
+            let log = git(&["log", &format!("{seen}..{target}"), "--color=never"])?;
+            let mut metadata_only = true;
+            for revision in [seen, tree] {
+                let entries = git(&["ls-tree", "-z", revision])?;
+                for entry in entries.stdout.split(|&byte| byte == 0) {
+                    if let Some(tab) = entry.iter().position(|&byte| byte == b'\t')
+                        && &entry[tab + 1..] == b".SRCINFO"
+                        && !entry.starts_with(b"100644 blob ")
+                        && !entry.starts_with(b"100755 blob ")
+                    {
+                        metadata_only = false;
+                    }
+                }
+            }
+            let mut args = vec![
+                "--no-literal-pathspecs",
+                "-c",
+                "core.attributesFile=/dev/null",
+                "diff",
+                "--stat",
+                "--patch",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--color=never",
+                seen,
+                tree,
+                "--",
+            ];
+            if metadata_only {
+                args.push(":(top,exclude,glob).SRCINF[O]");
+            }
+            let git_dir = git(&["rev-parse", "--absolute-git-dir"])?;
+            let git_dir = git_dir
+                .stdout
+                .strip_suffix(b"\n")
+                .context("missing Git directory")?;
+            let worktree = tempfile::tempdir()?;
+            let isolated = |args: &[&str]| {
+                exec::command_output(
+                    review_command(fetch, &repo.name, args)
+                        .current_dir(worktree.path())
+                        .env("GIT_DIR", OsStr::from_bytes(git_dir))
+                        .env("GIT_WORK_TREE", worktree.path())
+                        .env("GIT_INDEX_FILE", worktree.path().join("index"))
+                        .env("GIT_ATTR_NOSYSTEM", "1")
+                        .env_remove("GIT_ATTR_SOURCE"),
+                )
+            };
+            isolated(&["read-tree", "--empty"])?;
+            let diff = isolated(&args)?;
+            let mut text = String::from_utf8_lossy(&log.stdout).into_owned();
+            text.push_str(&String::from_utf8_lossy(&diff.stdout));
+            text.push('\n');
+            Ok(text)
+        })
+        .collect()
+}
+
 fn file_manager(
     config: &Config,
     fetch: &aur_fetch::Fetch,
     fm: &str,
-    pkgs: &[&str],
+    repos: &[ReviewedRepo],
 ) -> Result<tempfile::TempDir> {
-    let has_diff = fetch.has_diff(pkgs)?;
-    fetch.save_diffs(&has_diff)?;
+    let pkgs = repos.iter().map(|r| r.name.as_str()).collect::<Vec<_>>();
+    let changed = repos
+        .iter()
+        .filter(|r| r.changed() && r.seen.is_some())
+        .collect::<Vec<_>>();
+    let has_diff = changed.iter().map(|r| r.name.as_str()).collect::<Vec<_>>();
+    let diffs = review_diffs(fetch, &changed)?;
+    std::fs::create_dir_all(&fetch.diff_dir)?;
+    for (pkg, diff) in has_diff.iter().zip(diffs) {
+        std::fs::write(fetch.diff_dir.join(format!("{pkg}.diff")), diff)?;
+    }
     let view = tempfile::Builder::new().prefix("aur").tempdir()?;
-    fetch.make_view(view.path(), pkgs, &has_diff)?;
+    fetch.make_view(view.path(), &pkgs, &has_diff)?;
     run_file_manager(config, fm, view.path())?;
     Ok(view)
 }
@@ -1711,169 +2124,315 @@ fn run_file_manager(config: &Config, fm: &str, dir: &Path) -> Result<()> {
 fn print_dir(
     config: &Config,
     pkgdir: &Path,
-    path: &Path,
     stdin: &mut impl Write,
     buf: &mut Vec<u8>,
     bat: bool,
-    recurse: u32,
 ) -> Result<()> {
+    let c = config.color;
+    let root = pkgdir.canonicalize()?;
+    let mut files = Vec::new();
+    for args in [
+        &["ls-files", "--cached", "-z"][..],
+        &[
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "--directory",
+            "-z",
+        ][..],
+    ] {
+        files.extend(
+            exec::command_output(
+                Command::new(&config.git_bin)
+                    .args(&config.git_flags)
+                    .args(args)
+                    .current_dir(pkgdir),
+            )?
+            .stdout,
+        );
+    }
+
+    for name in files
+        .split(|&byte| byte == 0)
+        .filter(|name| !name.is_empty())
     {
-        let c = config.color;
-        let has_pkgbuild = path.join("PKGBUILD").exists();
-
-        for file in read_dir(path).with_context(|| tr!("failed to read dir: {}", path.display()))? {
-            let file = file?;
-
-            if file.file_type()?.is_dir() && file.path().file_name() == Some(OsStr::new(".git")) {
-                continue;
+        let file = pkgdir.join(OsStr::from_bytes(name));
+        let metadata = match symlink_metadata(&file) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| tr!("failed to open: {}", file.display().to_string()));
             }
-            if file.file_type()?.is_file()
-                && file.path().file_name() == Some(OsStr::new(".SRCINFO"))
-            {
-                continue;
-            }
-            if file.file_type()?.is_dir() {
-                if recurse == 0 {
-                    continue;
-                }
-                print_dir(config, pkgdir, &file.path(), stdin, buf, bat, recurse - 1)?;
-            }
-            if !has_pkgbuild {
-                continue;
-            }
-            if file.file_type()?.is_symlink() {
-                let s = format!(
-                    "  {} -> {}\n\n",
-                    file.path().strip_prefix(pkgdir)?.display(),
-                    read_link(file.path())?.display()
-                );
-                let _ = write!(stdin, "  {}", c.bold.paint(s));
-                continue;
-            }
-            if file.file_type()?.is_dir() {
-                continue;
-            }
-
+        };
+        if metadata.file_type().is_symlink() {
+            let s = format!(
+                "  {} -> {}\n\n",
+                escape_control(&file.strip_prefix(pkgdir)?.display().to_string()),
+                escape_control(&read_link(&file)?.display().to_string())
+            );
+            let _ = write!(stdin, "  {}", c.bold.paint(s));
+            continue;
+        }
+        if name == b".SRCINFO" {
+            continue;
+        }
+        if metadata.is_dir() {
+            let file = file.strip_prefix(pkgdir)?;
             let _ = writeln!(
                 stdin,
-                "  {}:",
-                c.bold
-                    .paint(file.path().strip_prefix(pkgdir)?.display().to_string())
+                "  {}\n",
+                c.bold.paint(tr!(
+                    "directory: {}",
+                    escape_control(&file.display().to_string())
+                ))
             );
-            if bat {
-                let mut cmd = Command::new(&config.bat_bin);
-                cmd.arg("--paging=never")
-                    .arg("--style=plain")
-                    .arg("--color=always")
-                    .arg(file.path())
-                    .args(&config.bat_flags);
-                let output = exec::command_output(&mut cmd)?;
-
-                for line in output.stdout.lines() {
-                    let _ = stdin.write_all(b"    ");
-                    let _ = stdin.write_all(line?.as_bytes());
-                    let _ = stdin.write_all(b"\n");
-                }
-            } else {
-                let mut pkgfile = OpenOptions::new()
-                    .read(true)
-                    .open(file.path())
-                    .with_context(|| {
-                        tr!("failed to open: {}", file.path().display().to_string())
-                    })?;
-                buf.clear();
-                pkgfile.read_to_end(buf)?;
-
-                match std::str::from_utf8(buf) {
-                    Ok(_) => {
-                        for line in buf.lines() {
-                            let _ = stdin.write_all(b"    ");
-                            let _ = stdin.write_all(line?.as_bytes());
-                            let _ = stdin.write_all(b"\n");
-                        }
-                    }
-                    Err(_) => {
-                        let file = file.path();
-                        let file = file.strip_prefix(pkgdir)?;
-                        let _ = write!(
-                            stdin,
-                            "  {}",
-                            c.bold
-                                .paint(tr!("binary file: {}", file.display().to_string()))
-                        );
-                    }
-                };
-            }
-            let _ = stdin.write_all(b"\n");
+            continue;
         }
+        if !metadata.is_file() || !file.canonicalize()?.starts_with(&root) {
+            continue;
+        }
+
+        let mut pkgfile = OpenOptions::new()
+            .read(true)
+            .open(&file)
+            .with_context(|| tr!("failed to open: {}", file.display().to_string()))?;
+        buf.clear();
+        std::io::Read::by_ref(&mut pkgfile)
+            .take(8192)
+            .read_to_end(buf)?;
+        if buf.contains(&0)
+            || std::str::from_utf8(buf)
+                .is_err_and(|err| err.error_len().is_some() || buf.len() < 8192)
+        {
+            let file = file.strip_prefix(pkgdir)?;
+            let _ = writeln!(
+                stdin,
+                "  {}\n",
+                c.bold.paint(tr!(
+                    "binary file: {}",
+                    escape_control(&file.display().to_string())
+                ))
+            );
+            continue;
+        }
+
+        pkgfile.read_to_end(buf)?;
+        let text = match std::str::from_utf8(buf) {
+            Ok(text) if !buf.contains(&0) => escape_control_multiline(text),
+            _ => {
+                let file = file.strip_prefix(pkgdir)?;
+                let _ = writeln!(
+                    stdin,
+                    "  {}\n",
+                    c.bold.paint(tr!(
+                        "binary file: {}",
+                        escape_control(&file.display().to_string())
+                    ))
+                );
+                continue;
+            }
+        };
+
+        let name = file.strip_prefix(pkgdir)?.display().to_string();
+        let _ = writeln!(stdin, "  {}:", c.bold.paint(escape_control(&name)));
+        if bat
+            && !name.chars().any(char::is_control)
+            && matches!(text, std::borrow::Cow::Borrowed(_))
+        {
+            let mut cmd = Command::new(&config.bat_bin);
+            cmd.arg("--paging=never")
+                .arg("--style=plain")
+                .arg("--color=always")
+                .arg(&file)
+                .args(&config.bat_flags);
+            let output = exec::command_output(&mut cmd)?;
+
+            for line in output.stdout.lines() {
+                let _ = stdin.write_all(b"    ");
+                let _ = stdin.write_all(line?.as_bytes());
+                let _ = stdin.write_all(b"\n");
+            }
+        } else {
+            for line in text.lines() {
+                let _ = writeln!(stdin, "    {line}");
+            }
+        }
+        let _ = stdin.write_all(b"\n");
     }
 
     Ok(())
 }
 
-pub fn review(config: &Config, fetch: &aur_fetch::Fetch, pkgs: &[&str]) -> Result<()> {
+fn print_review_diff(config: &Config, stdin: &mut impl Write, diff: &str, indent: bool) {
+    let c = config.color;
+    let indent = if indent { "    " } else { "" };
+    for line in diff.trim_end_matches('\n').split('\n') {
+        let style = if line.starts_with("diff ") || line.starts_with("index ") {
+            c.bold
+        } else if line.starts_with('+') {
+            c.new_version
+        } else if line.starts_with('-') {
+            c.old_version
+        } else if line.starts_with("@@") {
+            c.action
+        } else {
+            Style::new()
+        };
+        let _ = writeln!(
+            stdin,
+            "{indent}{}",
+            style.paint(escape_control_multiline(line))
+        );
+    }
+}
+
+pub(crate) fn seen_repos<'a>(fetch: &aur_fetch::Fetch, pkgs: &[&'a str]) -> Vec<&'a str> {
+    pkgs.iter()
+        .copied()
+        .filter(|&pkg| {
+            let mut cmd = Command::new(&fetch.git);
+            cmd.current_dir(fetch.clone_dir.join(pkg))
+                .args(&fetch.git_flags)
+                .args([
+                    "-c",
+                    "core.warnAmbiguousRefs=false",
+                    "rev-parse",
+                    "--verify",
+                    "--symbolic-full-name",
+                    "AUR_SEEN",
+                ]);
+            exec::command_output(&mut cmd).is_ok_and(|output| output.stdout == b"AUR_SEEN\n")
+        })
+        .collect()
+}
+
+#[cfg(feature = "tui")]
+fn review_tree_text(fetch: &aur_fetch::Fetch, repo: &ReviewedRepo) -> Result<String> {
+    // Render the planned tree, including pending merges, without following symlinks
+    // or invoking diff/textconv commands from repository configuration.
+    let entries = review_git(fetch, &repo.name, &["ls-tree", "-r", "-z", &repo.tree])?;
+    let mut text = String::new();
+    for entry in entries
+        .stdout
+        .split(|&b| b == 0)
+        .filter(|entry| !entry.is_empty())
+    {
+        let Some(tab) = entry.iter().position(|&b| b == b'\t') else {
+            bail!("Invalid review tree entry");
+        };
+        let mut metadata = std::str::from_utf8(&entry[..tab])?.split_whitespace();
+        let mode = metadata.next().context("Missing review file mode")?;
+        let kind = metadata.next().context("Missing review object type")?;
+        let object = metadata.next().context("Missing review object ID")?;
+        let name = &entry[tab + 1..];
+        if name == b".SRCINFO" && mode == "100644" {
+            continue;
+        }
+        let name = escape_control(&String::from_utf8_lossy(name)).into_owned();
+        if kind != "blob" {
+            writeln!(text, "{name}: {kind} {object}\n")?;
+            continue;
+        }
+        let content = review_git(fetch, &repo.name, &["cat-file", "blob", object])?.stdout;
+        if mode == "120000" {
+            writeln!(
+                text,
+                "{name} -> {}\n",
+                escape_control(&String::from_utf8_lossy(&content))
+            )?;
+        } else if content.contains(&0) {
+            writeln!(text, "{name}: binary file ({} bytes)\n", content.len())?;
+        } else {
+            writeln!(
+                text,
+                "{name}:\n{}\n",
+                escape_control_multiline(&String::from_utf8_lossy(&content))
+            )?;
+        }
+    }
+    Ok(text)
+}
+
+pub(crate) fn review(
+    config: &Config,
+    fetch: &aur_fetch::Fetch,
+    pkgs: &[&str],
+    merge: bool,
+) -> Result<Vec<ReviewedRepo>> {
+    let c = config.color;
+
+    if pkgs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut reviewed = review_plan(fetch, pkgs, merge)?;
+
     #[cfg(feature = "tui")]
-    if crate::tui::bridge::connected() {
-        let unseen = fetch.unseen(pkgs)?;
-        let has_diff = fetch.has_diff(&unseen)?;
-        let diffs = fetch.diff(&has_diff, false)?;
-        for (&pkg, diff) in has_diff.iter().zip(diffs) {
+    if crate::tui::bridge::connected() && !config.no_confirm {
+        let unseen = reviewed
+            .iter()
+            .filter(|repo| repo.changed())
+            .collect::<Vec<_>>();
+        for repo in unseen {
+            let (heading, text, question) = if repo.seen.is_some() {
+                let diff = review_diffs(fetch, &[repo])?.remove(0);
+                (
+                    "Review changes",
+                    escape_control_multiline(&diff).into_owned(),
+                    "Accept these changes?",
+                )
+            } else {
+                (
+                    "Review build files",
+                    review_tree_text(fetch, repo)?,
+                    "Accept these build files?",
+                )
+            };
             if !crate::tui::bridge::confirm(
-                &format!("Review changes for {pkg}:\n\n{diff}\n\nAccept these changes?"),
+                &format!(
+                    "{heading} for {}:\n\n{text}\n\n{question}",
+                    escape_control(&repo.name)
+                ),
                 false,
             )
             .unwrap_or(false)
             {
-                return Status::err(1);
+                return Err(Status(1).into());
             }
         }
-        for &pkg in &unseen {
-            if !has_diff.contains(&pkg) {
-                let dir = fetch.clone_dir.join(pkg);
-                let mut text = Vec::new();
-                let mut buffer = Vec::new();
-                print_dir(config, &dir, &dir, &mut text, &mut buffer, false, 1)?;
-                let text = String::from_utf8_lossy(&text);
-                if !crate::tui::bridge::confirm(
-                    &format!(
-                        "Review build files for {pkg}:\n\n{text}\n\nAccept these build files?"
-                    ),
-                    false,
-                )
-                .unwrap_or(false)
-                {
-                    return Status::err(1);
-                }
-            }
-        }
-        fetch.mark_seen(pkgs)?;
-        return Ok(());
+        // Callers merge and mark exactly these reviewed trees using upstream's checks.
+        return Ok(reviewed);
     }
 
-    let c = config.color;
-
-    if pkgs.is_empty() {
-        return Ok(());
-    }
     if !config.no_confirm {
         if let Some(ref fm) = config.fm {
-            let _view = file_manager(config, fetch, fm, pkgs)?;
+            let _view = file_manager(config, fetch, fm, &reviewed)?;
+            file_manager_changes(fetch, &mut reviewed)?;
 
             if !ask(config, &tr!("Accept changes?"), true) {
-                return Status::err(1);
+                return Err(Status(1).into());
             }
 
             if config.save_changes {
-                fetch.commit(pkgs, "paru save changes")?;
+                save_review_changes(fetch, &mut reviewed)?;
             }
         } else {
-            let unseen = fetch.unseen(pkgs)?;
-            let has_diff = fetch.has_diff(&unseen)?;
-            let printed = !has_diff.is_empty() || unseen.iter().any(|p| !has_diff.contains(p));
-            let diffs = fetch.diff(&has_diff, config.color.enabled)?;
+            let unseen = reviewed
+                .iter()
+                .filter(|repo| repo.changed())
+                .collect::<Vec<_>>();
+            let has_diff = unseen
+                .iter()
+                .copied()
+                .filter(|repo| repo.seen.is_some())
+                .collect::<Vec<_>>();
+            let printed = !unseen.is_empty();
+            let diffs = review_diffs(fetch, &has_diff)?;
 
             if printed {
-                let pager_unconfigured = var("PARU_PAGER").is_err() && var("PAGER").is_err();
+                let pager_unconfigured = config.pager_cmd.is_none()
+                    && var("PARU_PAGER").is_err()
+                    && var("PAGER").is_err();
                 let pager = if has_command("less") { "less" } else { "cat" };
 
                 let pager = config
@@ -1904,25 +2463,30 @@ pub fn review(config: &Config, fetch: &aur_fetch::Fetch, pkgs: &[&str]) -> Resul
                     let _ = stdin.write_all(b"\n\n");
                 }
 
-                for (&pkg, diff) in has_diff.iter().zip(diffs) {
-                    let _ = write!(
+                for (repo, diff) in has_diff.iter().zip(diffs) {
+                    let _ = writeln!(
                         stdin,
-                        "{} {}:\n    ",
+                        "{} {}:",
                         c.action.paint("::"),
-                        c.bold.paint(pkg)
+                        c.bold.paint(escape_control(&repo.name))
                     );
-                    let _ = stdin.write_all(diff.replace('\n', "\n    ").trim_end().as_bytes());
-                    let _ = stdin.write_all(b"\n\n");
+                    print_review_diff(config, &mut stdin, &diff, pager_unconfigured);
+                    let _ = stdin.write_all(b"\n");
                 }
 
                 let bat = config.color.enabled && has_command(&config.bat_bin);
 
                 let mut buf = Vec::new();
-                for &pkg in &unseen {
-                    if !has_diff.contains(&pkg) {
-                        let dir = fetch.clone_dir.join(pkg);
-                        let _ = writeln!(stdin, "{} {}:", c.action.paint("::"), c.bold.paint(pkg));
-                        print_dir(config, &dir, &dir, &mut stdin, &mut buf, bat, 1)?;
+                for repo in &unseen {
+                    if repo.seen.is_none() {
+                        let dir = fetch.clone_dir.join(&repo.name);
+                        let _ = writeln!(
+                            stdin,
+                            "{} {}:",
+                            c.action.paint("::"),
+                            c.bold.paint(escape_control(&repo.name))
+                        );
+                        print_dir(config, &dir, &mut stdin, &mut buf, bat)?;
                     }
                 }
 
@@ -1931,7 +2495,7 @@ pub fn review(config: &Config, fetch: &aur_fetch::Fetch, pkgs: &[&str]) -> Resul
                 exec::RAISE_SIGPIPE.store(true, Ordering::Relaxed);
 
                 if !ask(config, &tr!("Accept changes?"), true) {
-                    return Status::err(1);
+                    return Err(Status(1).into());
                 }
             } else {
                 printtr!(" nothing new to review");
@@ -1939,8 +2503,7 @@ pub fn review(config: &Config, fetch: &aur_fetch::Fetch, pkgs: &[&str]) -> Resul
         }
     }
 
-    fetch.mark_seen(pkgs)?;
-    Ok(())
+    Ok(reviewed)
 }
 
 fn update_aur_list(config: &Config) {
@@ -2201,6 +2764,7 @@ fn parse_package_list(
     let output =
         exec::makepkg_output_dest(config, dir, &["--packagelist", "--ignorearch"], pkgdest)?;
     let output = String::from_utf8(output.stdout).context("pkgdest is not utf8")?;
+    let dir = std::path::absolute(dir)?;
     let mut pkgdests = HashMap::new();
     let mut version = String::new();
 
@@ -2219,7 +2783,11 @@ fn parse_package_list(
         // if the PKGEXT contains a dash. Please no one do that.
         let pkgname = split[..split.len() - 3].join("-");
         version = split[split.len() - 3..split.len() - 1].join("-");
-        pkgdests.insert(pkgname, line.to_string());
+        let path = dir.join(line);
+        pkgdests.insert(
+            pkgname,
+            path.to_str().context("pkgdest is not utf8")?.to_string(),
+        );
     }
 
     Ok((pkgdests, version))
@@ -2329,6 +2897,360 @@ fn is_ver_char(c: char) -> bool {
     matches!(c, '<' | '=' | '>')
 }
 
+#[cfg(test)]
+mod review_tests {
+    use super::{
+        file_manager_changes, mark_reviewed, print_dir, print_review_diff, review_diffs,
+        review_plan, save_review_changes,
+    };
+    use crate::config::{Colors, Config};
+    use std::ffi::OsStr;
+    use std::fs;
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::symlink;
+    use std::path::Path;
+    use std::process::Command;
+
+    fn git(path: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .current_dir(path)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+
+    #[test]
+    fn aur_review_accepts_file_manager_commits_and_saved_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("fixture");
+        fs::create_dir(&repo).unwrap();
+        git(&repo, &["init", "-b", "master"]);
+        git(&repo, &["config", "user.name", "fixture"]);
+        git(&repo, &["config", "user.email", "fixture@localhost"]);
+        git(&repo, &["config", "commit.gpgsign", "false"]);
+        git(&repo, &["config", "core.hooksPath", "/dev/null"]);
+        fs::write(repo.join("PKGBUILD"), "pkgname=fixture\n").unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "fixture"]);
+        git(&repo, &["update-ref", "AUR_SEEN", "HEAD"]);
+        let mut fetch = aur_fetch::Fetch::with_cache_dir(dir.path());
+        fetch.clone_dir = dir.path().into();
+
+        for save in [false, true] {
+            let mut plans = review_plan(&fetch, &["fixture"], false).unwrap();
+            let seen = plans[0].seen.clone();
+            fs::write(repo.join("PKGBUILD"), format!("pkgname=edited-{save}\n")).unwrap();
+            git(&repo, &["commit", "-am", "manual edit"]);
+            file_manager_changes(&fetch, &mut plans).unwrap();
+            assert_eq!(plans[0].seen, seen);
+            assert!(plans[0].upstream.is_none());
+            assert!(plans[0].fork_point.is_none());
+            if save {
+                fs::write(repo.join("PKGBUILD"), "pkgname=saved\n").unwrap();
+                save_review_changes(&fetch, &mut plans).unwrap();
+            }
+            mark_reviewed(&fetch, &plans).unwrap();
+            assert!(!review_plan(&fetch, &["fixture"], false).unwrap()[0].changed());
+        }
+
+        let mut plans = review_plan(&fetch, &["fixture"], false).unwrap();
+        file_manager_changes(&fetch, &mut plans).unwrap();
+        fs::write(repo.join("PKGBUILD"), "pkgname=changed-after-prompt\n").unwrap();
+        git(&repo, &["commit", "-am", "later edit"]);
+        assert!(save_review_changes(&fetch, &mut plans).is_err());
+        assert!(mark_reviewed(&fetch, &plans).is_err());
+    }
+
+    #[test]
+    fn initial_review_includes_nested_and_local_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        git(&repo, &["init"]);
+        fs::create_dir_all(repo.join("keys/pgp")).unwrap();
+        fs::write(repo.join("PKGBUILD"), "pkgname=fixture\n").unwrap();
+        fs::write(repo.join("keys/pgp/helper.asc"), "nested-body\n").unwrap();
+        fs::write(repo.join("keys/.SRCINFO"), "nested-srcinfo\n").unwrap();
+        fs::create_dir_all(repo.join("packages/local")).unwrap();
+        fs::write(repo.join("packages/local/PKGBUILD"), "pkgname=local\n").unwrap();
+        fs::write(repo.join(".SRCINFO"), "hidden-srcinfo\n").unwrap();
+        fs::write(repo.join("archive.bin"), b"\0binary-body\xff").unwrap();
+        fs::write(repo.join(".gitignore"), "ignored*\n").unwrap();
+        fs::write(repo.join("edited"), "original-body\n").unwrap();
+        fs::write(repo.join("deleted"), "deleted-body\n").unwrap();
+        fs::write(repo.join("renamed"), "renamed-body\n").unwrap();
+        fs::create_dir(repo.join("replaced")).unwrap();
+        fs::write(repo.join("replaced/file"), "old-directory-body\n").unwrap();
+        fs::write(
+            repo.join(OsStr::from_bytes(b"non-utf8-\xff")),
+            "non-utf8-body\n",
+        )
+        .unwrap();
+        let external = dir.path().join("external");
+        fs::write(&external, "external-private-body\n").unwrap();
+        symlink(&external, repo.join("external-link")).unwrap();
+        git(&repo, &["add", "."]);
+        fs::write(repo.join("ignored-tracked"), "tracked-ignored-body\n").unwrap();
+        git(&repo, &["add", "-f", "ignored-tracked"]);
+        fs::write(repo.join("edited"), "edited-body\n").unwrap();
+        fs::remove_file(repo.join("deleted")).unwrap();
+        fs::remove_file(repo.join("replaced/file")).unwrap();
+        fs::remove_dir(repo.join("replaced")).unwrap();
+        let outside = dir.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("file"), "outside-directory-body\n").unwrap();
+        symlink(&outside, repo.join("replaced")).unwrap();
+        git(&repo, &["mv", "renamed", "destination"]);
+        fs::write(repo.join("new"), "untracked-body\n").unwrap();
+        fs::write(
+            repo.join("packages/local/local.patch"),
+            "local-patch-body\n",
+        )
+        .unwrap();
+        fs::create_dir_all(repo.join("build-tree/nested")).unwrap();
+        fs::write(
+            repo.join("build-tree/nested/output"),
+            "build-residue-body\n",
+        )
+        .unwrap();
+        fs::write(repo.join("ignored-build"), "ignored-build-body\n").unwrap();
+
+        let mut config = Config::default();
+        config.color = Colors::from("never");
+        config.git_flags = vec!["-c".into(), "core.quotePath=true".into()];
+        let mut output = Vec::new();
+        print_dir(&config, &repo, &mut output, &mut Vec::new(), false).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        for body in [
+            "nested-body",
+            "nested-srcinfo",
+            "edited-body",
+            "renamed-body",
+            "non-utf8-body",
+            "tracked-ignored-body",
+            "untracked-body",
+            "local-patch-body",
+        ] {
+            assert!(output.contains(&format!("    {body}\n")), "{output}");
+        }
+        assert!(output.contains("destination:"), "{output}");
+        assert!(output.contains("binary file: archive.bin"), "{output}");
+        assert!(output.contains("directory: build-tree"), "{output}");
+        assert!(output.find("nested-body").unwrap() < output.find("untracked-body").unwrap());
+        assert!(
+            output.contains(&format!("external-link -> {}", external.display())),
+            "{output}"
+        );
+        for absent in [
+            "hidden-srcinfo",
+            "original-body",
+            "deleted-body",
+            "external-private-body",
+            "outside-directory-body",
+            "ignored-build-body",
+            "binary-body",
+            "build-residue-body",
+            "renamed:",
+        ] {
+            assert!(!output.contains(absent), "{output}");
+        }
+
+        fs::remove_file(repo.join(".SRCINFO")).unwrap();
+        symlink(&external, repo.join(".SRCINFO")).unwrap();
+        let mut output = Vec::new();
+        print_dir(&config, &repo, &mut output, &mut Vec::new(), false).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(
+            output.contains(&format!(".SRCINFO -> {}", external.display())),
+            "{output}"
+        );
+        assert!(!output.contains("external-private-body"), "{output}");
+    }
+
+    #[test]
+    fn initial_review_summarizes_binary_files_before_bat() {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init"]);
+        fs::write(dir.path().join("archive.bin"), b"\0binary-body\xff").unwrap();
+        git(dir.path(), &["add", "archive.bin"]);
+        let mut config = Config::default();
+        config.color = Colors::from("never");
+        config.bat_bin = "/bin/false".into();
+        let mut output = Vec::new();
+        print_dir(&config, dir.path(), &mut output, &mut Vec::new(), true).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("binary file: archive.bin"), "{output}");
+        assert!(!output.contains("binary-body"), "{output}");
+    }
+
+    #[test]
+    fn initial_review_escapes_terminal_controls_before_bat() {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init"]);
+        let name = "PKGBUILD\x1b[8m";
+        let text = format!(
+            "{}\n\tvisible\x1b[8mhidden\x1b[0m\rreturned\x07\u{009b}\n",
+            "x".repeat(8192)
+        );
+        fs::write(dir.path().join(name), &text).unwrap();
+        fs::write(dir.path().join("safe\x1b[8m.sh"), "safe-body\n").unwrap();
+        symlink("target\x1b]2;title\x07", dir.path().join("link\x1b[8m")).unwrap();
+        git(dir.path(), &["add", "."]);
+        let mut config = Config::default();
+        config.color = Colors::from("never");
+        config.bat_bin = "/bin/false".into();
+
+        for bat in [false, true] {
+            let mut output = Vec::new();
+            print_dir(&config, dir.path(), &mut output, &mut Vec::new(), bat).unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains(r"PKGBUILD\u{1b}[8m:"), "{output:?}");
+            assert!(
+                output.contains("safe\\u{1b}[8m.sh:\n    safe-body\n"),
+                "{output:?}"
+            );
+            assert!(
+                output.contains(r"link\u{1b}[8m -> target\u{1b}]2;title\u{7}"),
+                "{output:?}"
+            );
+            assert!(
+                output
+                    .contains("    \tvisible\\u{1b}[8mhidden\\u{1b}[0m\\rreturned\\u{7}\\u{9b}\n"),
+                "{output:?}"
+            );
+            assert!(
+                !output
+                    .chars()
+                    .any(|c| c.is_control() && c != '\n' && c != '\t'),
+                "{output:?}"
+            );
+        }
+        assert_eq!(fs::read_to_string(dir.path().join(name)).unwrap(), text);
+    }
+
+    #[test]
+    fn review_diff_only_hides_regular_root_srcinfo() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("fixture");
+        fs::create_dir_all(repo.join("keys")).unwrap();
+        git(&repo, &["init", "-b", "master"]);
+        git(&repo, &["config", "user.name", "fixture"]);
+        git(&repo, &["config", "user.email", "fixture@localhost"]);
+        git(&repo, &["config", "diff.external", "/bin/false"]);
+        git(&repo, &["config", "diff.refusing.textconv", "/bin/false"]);
+        fs::write(
+            repo.join(".gitattributes"),
+            "* -diff\nPKGBUILD diff=refusing\n",
+        )
+        .unwrap();
+        fs::write(repo.join("PKGBUILD"), "pkgname=fixture-0\n").unwrap();
+        fs::write(repo.join("archive.bin"), b"\0archive-body-0\n").unwrap();
+        fs::write(repo.join(".SRCINFO"), "metadata-0\n").unwrap();
+        fs::write(repo.join("keys/.SRCINFO"), "nested-0\n").unwrap();
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-m", "fixture"]);
+        git(&repo, &["update-ref", "AUR_SEEN", "HEAD"]);
+        git(&repo, &["config", "branch.master.remote", "."]);
+        git(
+            &repo,
+            &["config", "branch.master.merge", "refs/heads/upstream"],
+        );
+        let mut fetch = aur_fetch::Fetch::with_cache_dir(dir.path());
+        fetch.clone_dir = dir.path().into();
+
+        for version in 1..=5 {
+            let metadata = repo.join(".SRCINFO");
+            if metadata.is_dir() {
+                fs::remove_dir_all(&metadata).unwrap();
+            } else {
+                fs::remove_file(&metadata).unwrap();
+            }
+            match version {
+                1 | 5 => fs::write(&metadata, format!("metadata-{version}\n")).unwrap(),
+                2 | 3 => symlink(format!("target-{version}"), &metadata).unwrap(),
+                4 => {
+                    fs::create_dir(&metadata).unwrap();
+                    fs::write(metadata.join("helper"), "directory-body\n").unwrap();
+                }
+                _ => unreachable!(),
+            }
+            fs::write(
+                repo.join("PKGBUILD"),
+                format!("pkgname=fixture-{version}\n# \x1b[8mdiff-hidden\x1b[0m\rreturned\x07\n"),
+            )
+            .unwrap();
+            fs::write(repo.join("keys/.SRCINFO"), format!("nested-{version}\n")).unwrap();
+            fs::write(
+                repo.join("archive.bin"),
+                format!("\0archive-body-{version}\n"),
+            )
+            .unwrap();
+            git(&repo, &["add", "-A"]);
+            git(&repo, &["commit", "-m", "fixture\x1b[8mlog-hidden\x1b[0m"]);
+            git(&repo, &["update-ref", "refs/heads/upstream", "HEAD"]);
+            fs::write(repo.join("PKGBUILD"), "dirty-preserved\n").unwrap();
+            let index = fs::read(repo.join(".git/index")).unwrap();
+
+            for literal in [false, true] {
+                fetch.git_flags = if literal {
+                    vec!["--literal-pathspecs".into()]
+                } else {
+                    Vec::new()
+                };
+                let plans = review_plan(&fetch, &["fixture"], true).unwrap();
+                let diff = review_diffs(&fetch, &plans.iter().collect::<Vec<_>>())
+                    .unwrap()
+                    .remove(0);
+                assert!(
+                    diff.contains(&format!("+pkgname=fixture-{version}")),
+                    "{diff}"
+                );
+                assert!(diff.contains(&format!("+nested-{version}")), "{diff}");
+                assert!(diff.contains("archive.bin"), "{diff}");
+                assert!(!diff.contains("archive-body"), "{diff}");
+                for color in ["never", "always"] {
+                    let mut config = Config::default();
+                    config.color = Colors::from(color);
+                    let mut output = Vec::new();
+                    print_review_diff(&config, &mut output, &diff, literal);
+                    let output = String::from_utf8(output).unwrap();
+                    assert!(
+                        output.contains(r"\u{1b}[8mdiff-hidden\u{1b}[0m\rreturned\u{7}"),
+                        "{output:?}"
+                    );
+                    assert!(
+                        output.contains(r"\u{1b}[8mlog-hidden\u{1b}[0m"),
+                        "{output:?}"
+                    );
+                    assert!(!output.contains("\x1b[8m"), "{output:?}");
+                    assert!(!output.contains(['\r', '\x07']), "{output:?}");
+                    if color == "never" {
+                        assert!(!output.contains('\x1b'), "{output:?}");
+                    } else {
+                        assert!(output.contains("\x1b[32m+pkgname="), "{output:?}");
+                    }
+                }
+                assert_eq!(
+                    fs::read(repo.join("PKGBUILD")).unwrap(),
+                    b"dirty-preserved\n"
+                );
+                assert_eq!(fs::read(repo.join(".git/index")).unwrap(), index);
+                match version {
+                    1 => assert!(!diff.contains("metadata-1"), "{diff}"),
+                    2 | 3 => assert!(diff.contains(&format!("+target-{version}")), "{diff}"),
+                    4 => assert!(diff.contains("+directory-body"), "{diff}"),
+                    5 => assert!(diff.contains("-directory-body"), "{diff}"),
+                    _ => unreachable!(),
+                }
+            }
+            git(&repo, &["update-ref", "AUR_SEEN", "HEAD"]);
+        }
+    }
+}
+
 #[cfg(all(test, feature = "mock"))]
 mod release_age_tests {
     use super::recheck_release_age;
@@ -2425,5 +3347,268 @@ mod release_age_tests {
         recheck_release_age(&config, std::iter::once(&expected))
             .await
             .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use tempfile::TempDir;
+
+    const OLD_SRCINFO: &str = "pkgbase = devel
+        pkgver = 0
+        pkgrel = 1
+        arch = armv7h
+        source = git+@SOURCE@/.git
+        validpgpkeys = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+
+    pkgname = devel
+    ";
+    const NEW_SRCINFO: &str = "pkgbase = devel
+        pkgver = 1
+        pkgrel = 1
+        arch = x86_64
+        source = git+@SOURCE@
+        validpgpkeys = BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+
+    pkgname = devel
+    ";
+
+    fn git(dir: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args([
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "init.templateDir=",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+            ])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{:?}", output);
+    }
+
+    fn fixture(old: Option<&str>, new: &str) -> (TempDir, Config, Bases) {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = tmp.path().join("devel");
+        fs::create_dir(&origin).unwrap();
+        git(&origin, &["init", "--initial-branch=master"]);
+
+        let mut config = Config::default();
+        config.fetch = aur_fetch::Fetch::with_cache_dir(tmp.path().join("cache"));
+        config.build_dir = config.fetch.clone_dir.clone();
+        let git_bin = tmp.path().join("git");
+        fs::write(
+            &git_bin,
+            r#"#!/bin/sh
+export GIT_ALLOW_PROTOCOL=file
+exec git -c core.hooksPath=/dev/null -c init.templateDir= -c "url.file://$(dirname "$0")/.insteadOf=https://aur.archlinux.org/" "$@"
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&git_bin, fs::Permissions::from_mode(0o755)).unwrap();
+        config.fetch.git = git_bin;
+        fs::write(origin.join("PKGBUILD"), "pkgname=devel\n").unwrap();
+
+        let source = url::Url::from_file_path(&origin).unwrap();
+        if let Some(old) = old {
+            fs::write(
+                origin.join(".SRCINFO"),
+                old.replace("@SOURCE@", source.as_str()),
+            )
+            .unwrap();
+            git(&origin, &["add", "."]);
+            git(&origin, &["commit", "-m", "Initial metadata"]);
+            config.fetch.download(&["devel"]).unwrap();
+        }
+
+        fs::write(
+            origin.join(".SRCINFO"),
+            new.replace("@SOURCE@", source.as_str()),
+        )
+        .unwrap();
+        git(&origin, &["add", "."]);
+        git(&origin, &["commit", "-m", "Updated metadata"]);
+
+        let bases = std::iter::once(raur::ArcPackage::new(raur::Package {
+            name: "devel".into(),
+            package_base: "devel".into(),
+            version: "1-1".into(),
+            ..Default::default()
+        }))
+        .collect();
+        (tmp, config, bases)
+    }
+
+    #[tokio::test]
+    async fn download_pkgbuilds_refreshes_srcinfo() {
+        let without_key = OLD_SRCINFO.replace(
+            "        validpgpkeys = AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n",
+            "",
+        );
+        for old in [None, Some(without_key.as_str()), Some(OLD_SRCINFO)] {
+            let (tmp, config, bases) = fixture(old, NEW_SRCINFO);
+            let mut installer = Installer::new(&config);
+            installer.download_pkgbuilds(&config, &bases).await.unwrap();
+
+            let expected = Srcinfo::from_path(tmp.path().join("devel/.SRCINFO")).unwrap();
+            assert_eq!(installer.srcinfos["devel"], expected);
+            assert_eq!(
+                installer.srcinfos["devel"].base.valid_pgp_keys,
+                ["BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"]
+            );
+
+            fs::remove_dir_all(tmp.path().join("devel")).unwrap();
+            installer.download_pkgbuilds(&config, &bases).await.unwrap();
+            assert_eq!(installer.srcinfos["devel"], expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn download_pkgbuilds_rejects_invalid_updated_srcinfo() {
+        let (_tmp, config, bases) = fixture(Some(OLD_SRCINFO), "invalid srcinfo\n");
+        let mut installer = Installer::new(&config);
+        let error = installer
+            .download_pkgbuilds(&config, &bases)
+            .await
+            .unwrap_err();
+        assert!(error.downcast_ref::<srcinfo::Error>().is_some());
+    }
+
+    #[tokio::test]
+    async fn download_pkgbuilds_rejects_missing_updated_srcinfo() {
+        let (tmp, config, bases) = fixture(Some(OLD_SRCINFO), NEW_SRCINFO);
+        let origin = tmp.path().join("devel");
+        git(&origin, &["rm", ".SRCINFO"]);
+        git(&origin, &["commit", "-m", "Remove metadata"]);
+        let mut installer = Installer::new(&config);
+        let error = installer
+            .download_pkgbuilds(&config, &bases)
+            .await
+            .unwrap_err();
+        assert!(!config.build_dir.join("devel/.SRCINFO").exists());
+        assert!(error.downcast_ref::<String>().is_some());
+    }
+
+    #[cfg(feature = "mock")]
+    fn gendb_config(tmp: &TempDir, config: &mut Config) {
+        let local = tmp.path().join("db/local");
+        fs::create_dir_all(local.join("devel-0-1")).unwrap();
+        fs::write(local.join("ALPM_DB_VERSION"), "9\n").unwrap();
+        fs::write(
+            local.join("devel-0-1/desc"),
+            "%NAME%\ndevel\n\n%VERSION%\n0-1\n\n%BASE%\ndevel\n\n%ARCH%\nx86_64\n\n",
+        )
+        .unwrap();
+        config.pacman.root_dir = "/".into();
+        config.pacman.db_path = tmp.path().join("db").to_str().unwrap().into();
+        config.pacman.architecture = vec!["x86_64".into()];
+        config.init_alpm().unwrap();
+        config.state_dir = tmp.path().join("state");
+        config.devel_path = config.state_dir.join("devel.toml");
+        config.raur = Some(crate::mock::Mock::new().unwrap());
+    }
+
+    #[cfg(feature = "mock")]
+    #[tokio::test]
+    async fn pre_build_command_requires_review_acceptance() {
+        if let Some(marker) = std::env::var_os("PARU_REVIEW_HOOK_MARKER") {
+            let (tmp, mut config, _) = fixture(None, NEW_SRCINFO);
+            gendb_config(&tmp, &mut config);
+            config.pager_cmd = Some("cat >/dev/null".into());
+            config.pre_build_command = Some(format!(
+                "printf '%s\\n' \"$PKGBASE\" > '{}'; exit 77",
+                Path::new(&marker).display()
+            ));
+            config.raur = Some(crate::mock::Mock::with_packages(vec![raur::Package {
+                name: "devel".into(),
+                package_base: "devel".into(),
+                version: "1-1".into(),
+                ..Default::default()
+            }]));
+            let mut cache = Cache::new();
+            let mut actions = aur_depends::Resolver::new(
+                &config.alpm,
+                &mut cache,
+                config.raur.as_ref().unwrap(),
+                aur_depends::Flags::AUR,
+            )
+            .resolve_targets(&["devel"])
+            .await
+            .unwrap();
+            let mut installer = Installer::new(&config);
+            assert!(
+                installer
+                    .prepare_build(&config, &cache, &mut actions)
+                    .await
+                    .is_err()
+            );
+            return;
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        for (answer, accepted) in [("y\nn\n", false), ("y\ny\n", true)] {
+            let marker = tmp.path().join("hook");
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "install::tests::pre_build_command_requires_review_acceptance",
+                    "--nocapture",
+                ])
+                .env("PARU_REVIEW_HOOK_MARKER", &marker)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(answer.as_bytes())
+                .unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(output.status.success(), "{output:?}");
+            assert_eq!(marker.exists(), accepted, "{output:?}");
+            if accepted {
+                assert_eq!(fs::read(&marker).unwrap(), b"devel\n");
+            }
+        }
+    }
+
+    #[cfg(feature = "mock")]
+    #[tokio::test]
+    async fn gendb_refreshes_srcinfo() {
+        for old in [None, Some(OLD_SRCINFO), Some("invalid srcinfo\n")] {
+            let (tmp, mut config, _) = fixture(old, NEW_SRCINFO);
+            gendb_config(&tmp, &mut config);
+            crate::devel::gendb(&mut config).await.unwrap();
+
+            let devel = load_devel_info(&config).unwrap().unwrap();
+            let repos = &devel.info["devel"].repos;
+            assert_eq!(repos.len(), 1);
+            let source = url::Url::from_file_path(tmp.path().join("devel")).unwrap();
+            assert_eq!(repos.iter().next().unwrap().url, source.as_str());
+        }
+    }
+
+    #[cfg(feature = "mock")]
+    #[tokio::test]
+    async fn gendb_discards_stale_srcinfo_when_update_is_invalid() {
+        let (tmp, mut config, _) = fixture(Some(OLD_SRCINFO), "invalid srcinfo\n");
+        gendb_config(&tmp, &mut config);
+        crate::devel::gendb(&mut config).await.unwrap();
+
+        let devel = load_devel_info(&config).unwrap().unwrap();
+        assert!(devel.info.is_empty());
     }
 }

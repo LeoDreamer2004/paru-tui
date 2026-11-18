@@ -6,9 +6,9 @@
 #, fuzzy
 msgid ""
 msgstr ""
-"Project-Id-Version: paru 2.2.0\n"
+"Project-Id-Version: paru  2.2.0\n"
 "Report-Msgid-Bugs-To: https://github.com/Morganamilo/paru\n"
-"POT-Creation-Date: 2026-10-28 16:12+0000\n"
+"POT-Creation-Date: 2026-11-13 22:58+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -17,40 +17,40 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-#: src/clean.rs:36
+#: src/clean.rs:37
 msgid "Do you want to clean ALL AUR packages from cache?"
 msgstr ""
 
-#: src/clean.rs:38
+#: src/clean.rs:39
 msgid "Do you want to clean all other AUR packages from cache?"
 msgstr ""
 
-#: src/clean.rs:41
+#: src/clean.rs:42
 msgid "Clone Directory: {}"
 msgstr ""
 
-#: src/clean.rs:47
+#: src/clean.rs:48
 msgid "\n"
 "Diff Directory: {}"
 msgstr ""
 
-#: src/clean.rs:49
+#: src/clean.rs:50
 msgid "Do you want to remove all saved diffs?"
 msgstr ""
 
-#: src/clean.rs:65
+#: src/clean.rs:66
 msgid "can't open diff dir: {}"
 msgstr ""
 
-#: src/clean.rs:76 src/clean.rs:180
+#: src/clean.rs:77 src/clean.rs:181
 msgid "could not remove '{}'"
 msgstr ""
 
-#: src/clean.rs:95
+#: src/clean.rs:96
 msgid "can't open clone dir: {}"
 msgstr ""
 
-#: src/clean.rs:141
+#: src/clean.rs:142
 msgid "could not parse .SRCINFO for '{}'"
 msgstr ""
 
@@ -70,15 +70,15 @@ msgstr ""
 msgid "unknown option -{}"
 msgstr ""
 
-#: src/completion.rs:26 src/search.rs:179 src/sync.rs:118
+#: src/completion.rs:33 src/search.rs:179 src/sync.rs:118
 msgid "failed to decode package list"
 msgstr ""
 
-#: src/completion.rs:35
+#: src/completion.rs:42
 msgid "failed to open cache file '{}'"
 msgstr ""
 
-#: src/completion.rs:83
+#: src/completion.rs:90
 msgid "could not update aur cache"
 msgstr ""
 
@@ -182,47 +182,47 @@ msgstr ""
 msgid "release age '{}' is too large"
 msgstr ""
 
-#: src/devel.rs:136 src/download.rs:207
+#: src/devel.rs:141 src/download.rs:207
 msgid "Querying AUR..."
 msgstr ""
 
-#: src/devel.rs:157 src/devel.rs:182 src/install.rs:203
+#: src/devel.rs:170 src/install.rs:198
 msgid "failed to parse srcinfo for '{}'"
 msgstr ""
 
-#: src/devel.rs:201
+#: src/devel.rs:186
 msgid "Looking for devel repos..."
 msgstr ""
 
-#: src/devel.rs:210
+#: src/devel.rs:195
 msgid "failed to save devel info"
 msgstr ""
 
-#: src/devel.rs:218
+#: src/devel.rs:203
 msgid "failed to create state directory: {}"
 msgstr ""
 
-#: src/devel.rs:233
+#: src/devel.rs:218
 msgid "failed to create temporary file: {}"
 msgstr ""
 
-#: src/devel.rs:238
+#: src/devel.rs:223
 msgid "failed to write to temporary file: {}"
 msgstr ""
 
-#: src/devel.rs:244
-msgid "failed to rename '{temp}' to '{devel_toml}"
+#: src/devel.rs:229
+msgid "failed to rename '{temp}' to '{devel_toml}'"
 msgstr ""
 
-#: src/devel.rs:496
+#: src/devel.rs:494
 msgid "package does not have an update"
 msgstr ""
 
-#: src/devel.rs:542
+#: src/devel.rs:540
 msgid "failed to lookup: {}"
 msgstr ""
 
-#: src/devel.rs:570
+#: src/devel.rs:568
 msgid "invalid toml: {}"
 msgstr ""
 
@@ -242,23 +242,31 @@ msgstr ""
 msgid "downloading: {pkg}"
 msgstr ""
 
-#: src/download.rs:279 src/download.rs:602 src/info.rs:60 src/info.rs:185 src/query.rs:49
+#: src/download.rs:279 src/download.rs:636 src/info.rs:60 src/info.rs:185 src/query.rs:49
 msgid "package '{}' was not found"
 msgstr ""
 
-#: src/download.rs:291
+#: src/download.rs:292
+msgid "invalid package base '{}'"
+msgstr ""
+
+#: src/download.rs:300
 msgid "duplicate PKGBUILD: {}"
 msgstr ""
 
-#: src/download.rs:307
+#: src/download.rs:322
+msgid "copy destination for '{}' overlaps a source directory"
+msgstr ""
+
+#: src/download.rs:338
 msgid "package '{}' exists but has no PKGBUILD -- skipping"
 msgstr ""
 
-#: src/download.rs:340
+#: src/download.rs:371
 msgid "Downloading PKGBUILDs..."
 msgstr ""
 
-#: src/download.rs:344
+#: src/download.rs:375
 msgid " PKGBUILDs up to date"
 msgstr ""
 
@@ -270,51 +278,51 @@ msgstr ""
 msgid "Pacman is currently in use, please wait..."
 msgstr ""
 
-#: src/fmt.rs:24 src/info.rs:280 src/search.rs:299 src/search.rs:356
+#: src/fmt.rs:25 src/info.rs:280 src/search.rs:306 src/search.rs:371
 msgid "None"
 msgstr ""
 
-#: src/fmt.rs:245
+#: src/fmt.rs:292
 msgid "Repo"
 msgstr ""
 
-#: src/fmt.rs:252
+#: src/fmt.rs:299
 msgid "Repo Make"
 msgstr ""
 
-#: src/fmt.rs:272
+#: src/fmt.rs:319
 msgid "Pkgbuilds Make"
 msgstr ""
 
-#: src/fmt.rs:274
+#: src/fmt.rs:321
 msgid "Aur Make"
 msgstr ""
 
-#: src/fmt.rs:316
+#: src/fmt.rs:363
 msgid "Repo ({})"
 msgstr ""
 
-#: src/fmt.rs:324
+#: src/fmt.rs:371
 msgid "Old Version"
 msgstr ""
 
-#: src/fmt.rs:325
+#: src/fmt.rs:372
 msgid "New Version"
 msgstr ""
 
-#: src/fmt.rs:326
+#: src/fmt.rs:373
 msgid "Make Only"
 msgstr ""
 
-#: src/fmt.rs:327
+#: src/fmt.rs:374
 msgid "Yes"
 msgstr ""
 
-#: src/fmt.rs:328 src/info.rs:226
+#: src/fmt.rs:375 src/info.rs:226
 msgid "No"
 msgstr ""
 
-#: src/fmt.rs:417
+#: src/fmt.rs:464
 msgid "insufficient columns available for table display"
 msgstr ""
 
@@ -786,224 +794,232 @@ msgstr ""
 msgid "could not get news"
 msgstr ""
 
-#: src/install.rs:172 src/install.rs:1131
+#: src/install.rs:172 src/install.rs:1123
 msgid "Proceed with installation?"
 msgstr ""
 
-#: src/install.rs:207
+#: src/install.rs:202
 msgid "could not find .SRCINFO for '{}'"
 msgstr ""
 
-#: src/install.rs:353
+#: src/install.rs:352
 msgid "could not find package '{pkg}' in package list for '{base}'"
 msgstr ""
 
-#: src/install.rs:451
+#: src/install.rs:440
 msgid "packages failed to build: {}"
 msgstr ""
 
-#: src/install.rs:519
+#: src/install.rs:508
 msgid "adding {} to the install list"
 msgstr ""
 
-#: src/install.rs:549 src/install.rs:564
+#: src/install.rs:538 src/install.rs:553
 msgid "failed to download sources for '{}'"
 msgstr ""
 
-#: src/install.rs:573 src/install.rs:599 src/install.rs:607
+#: src/install.rs:562 src/install.rs:588 src/install.rs:596
 msgid "failed to build '{}'"
 msgstr ""
 
-#: src/install.rs:576 src/install.rs:780
+#: src/install.rs:565 src/install.rs:773
 msgid "{}: parsing pkg list..."
 msgstr ""
 
-#: src/install.rs:580
+#: src/install.rs:569
 msgid "package list does not match srcinfo"
 msgstr ""
 
-#: src/install.rs:614
+#: src/install.rs:587
+msgid "package list contains different output directories"
+msgstr ""
+
+#: src/install.rs:603
 msgid "{}-{} is up to date -- skipping build"
 msgstr ""
 
-#: src/install.rs:771
+#: src/install.rs:764
 msgid "can't build {base}, deps not satisfied: {deps}"
 msgstr ""
 
-#: src/install.rs:842
+#: src/install.rs:829
 msgid "fetching devel info..."
 msgstr ""
 
-#: src/install.rs:907 src/lib.rs:258
+#: src/install.rs:894 src/lib.rs:258
 msgid "no targets specified (use -h for help)"
 msgstr ""
 
-#: src/install.rs:1011 src/install.rs:1101 src/search.rs:456 src/search.rs:482 src/lib.rs:322
+#: src/install.rs:1003 src/install.rs:1093 src/search.rs:482 src/search.rs:508 src/lib.rs:322
 msgid " there is nothing to do"
 msgstr ""
 
-#: src/install.rs:1019
+#: src/install.rs:1011
 msgid "Resolving dependencies..."
 msgstr ""
 
-#: src/install.rs:1080
+#: src/install.rs:1072
 msgid "can't install AUR package as root"
 msgstr ""
 
-#: src/install.rs:1083
+#: src/install.rs:1075
 msgid "--downloadonly can't be used for AUR packages"
 msgstr ""
 
-#: src/install.rs:1117
+#: src/install.rs:1109
 msgid "Remove make dependencies after install?"
 msgstr ""
 
-#: src/install.rs:1128
+#: src/install.rs:1120
 msgid "Proceed to review?"
 msgstr ""
 
-#: src/install.rs:1182
+#: src/install.rs:1175
 msgid "no architecture"
 msgstr ""
 
-#: src/install.rs:1196
+#: src/install.rs:1189
 msgid "The following packages are not compatible with your architecture:"
 msgstr ""
 
-#: src/install.rs:1210
+#: src/install.rs:1203
 msgid "Would you like to try build them anyway?"
 msgstr ""
 
-#: src/install.rs:1343
+#: src/install.rs:1336
 msgid "{n} day"
 msgid_plural "{n} days"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/install.rs:1346
+#: src/install.rs:1339
 msgid "{n} hour"
 msgid_plural "{n} hours"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/install.rs:1349
+#: src/install.rs:1342
 msgid "{n} minute"
 msgid_plural "{n} minutes"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/install.rs:1351
+#: src/install.rs:1344
 msgid "{n} second"
 msgid_plural "{n} seconds"
 msgstr[0] ""
 msgstr[1] ""
 
-#: src/install.rs:1386
+#: src/install.rs:1379
 msgid "AUR package '{}' changed while downloading PKGBUILDs; retry the operation"
 msgstr ""
 
-#: src/install.rs:1420
+#: src/install.rs:1413
 msgid "updated {} ago"
 msgstr ""
 
-#: src/install.rs:1427
+#: src/install.rs:1420
 msgid "the following AUR packages are newer than the minimum release age of {}: {}"
 msgstr ""
 
-#: src/install.rs:1432
+#: src/install.rs:1425
 msgid "pass --nominimumreleaseage with your operation to override (e.g. paru -Syu --nominimumreleaseage), or add a package to MinimumReleaseAgeExclude"
 msgstr ""
 
-#: src/install.rs:1453
+#: src/install.rs:1466
 msgid "duplicate packages: {}"
 msgstr ""
 
-#: src/install.rs:1457
+#: src/install.rs:1470
 msgid "could not find all required packages:"
 msgstr ""
 
-#: src/install.rs:1469
+#: src/install.rs:1482
 msgid "\n"
 "    {missing} (wanted by: {stack})"
 msgstr ""
 
-#: src/install.rs:1483 src/install.rs:2226
+#: src/install.rs:1496 src/install.rs:2709
 msgid "{}-{} is up to date -- skipping"
 msgstr ""
 
-#: src/install.rs:1491
+#: src/install.rs:1547
 msgid "Calculating conflicts..."
 msgstr ""
 
-#: src/install.rs:1512
+#: src/install.rs:1558
 msgid "Calculating inner conflicts..."
 msgstr ""
 
-#: src/install.rs:1524
+#: src/install.rs:1567
 msgid "Inner conflicts found:"
 msgstr ""
 
-#: src/install.rs:1546
+#: src/install.rs:1569
 msgid "Conflicts found:"
 msgstr ""
 
-#: src/install.rs:1569
+#: src/install.rs:1576
 msgid "Conflicting packages will have to be confirmed manually"
 msgstr ""
 
-#: src/install.rs:1573
+#: src/install.rs:1580
 msgid "can not install conflicting packages with --noconfirm"
 msgstr ""
 
-#: src/install.rs:1701
+#: src/install.rs:1837 src/install.rs:1866 src/install.rs:1968 src/install.rs:1988
+msgid "repo {} changed after review; review it again"
+msgstr ""
+
+#: src/install.rs:2102
 msgid "failed to execute file manager: {}"
 msgstr ""
 
-#: src/install.rs:1704
+#: src/install.rs:2105
 msgid "file manager '{}' did not execute successfully"
 msgstr ""
 
-#: src/install.rs:1722
-msgid "failed to read dir: {}"
-msgstr ""
-
-#: src/install.rs:1780
+#: src/install.rs:2151 src/install.rs:2183
 msgid "failed to open: {}"
 msgstr ""
 
-#: src/install.rs:1800
+#: src/install.rs:2172
+msgid "directory: {}"
+msgstr ""
+
+#: src/install.rs:2197 src/install.rs:2239
 msgid "binary file: {}"
 msgstr ""
 
-#: src/install.rs:1822 src/install.rs:1893
+#: src/install.rs:2287 src/install.rs:2377
 msgid "Accept changes?"
 msgstr ""
 
-#: src/install.rs:1862
+#: src/install.rs:2336
 msgid "Paging with less. Press 'q' to quit or 'h' for help."
 msgstr ""
 
-#: src/install.rs:1897
+#: src/install.rs:2381
 msgid " nothing new to review"
 msgstr ""
 
-#: src/install.rs:2174
+#: src/install.rs:2657
 msgid "can't find package name in packagelist: {}"
 msgstr ""
 
-#: src/install.rs:2246
+#: src/install.rs:2729
 msgid "Signing packages..."
 msgstr ""
 
-#: src/install.rs:2277
+#: src/install.rs:2760
 msgid "{}-{} is up to date -- skipping install"
 msgstr ""
 
-#: src/keys.rs:57
+#: src/keys.rs:58
 msgid "keys need to be imported:"
 msgstr ""
 
-#: src/keys.rs:62
+#: src/keys.rs:63
 msgid "     {key} wanted by: {base}"
 msgstr ""
 
@@ -1019,27 +1035,31 @@ msgstr ""
 msgid "no new news"
 msgstr ""
 
-#: src/pkgbuild.rs:91
+#: src/pkgbuild.rs:100
 msgid "repo {} does not have a URL or Path"
 msgstr ""
 
-#: src/pkgbuild.rs:153
+#: src/pkgbuild.rs:170
 msgid "repo {} not downloaded (use -Sy --pkgbuilds to download)"
 msgstr ""
 
-#: src/pkgbuild.rs:200
+#: src/pkgbuild.rs:182 src/pkgbuild.rs:409
+msgid "repo {} has unreviewed changes (use -Sy --pkgbuilds to review)"
+msgstr ""
+
+#: src/pkgbuild.rs:269
 msgid "Generating .SRCINFO for {repo}/{dir}..."
 msgstr ""
 
-#: src/pkgbuild.rs:278
+#: src/pkgbuild.rs:347
 msgid "failed to parse srcinfo \"{}\""
 msgstr ""
 
-#: src/pkgbuild.rs:368
+#: src/pkgbuild.rs:453
 msgid "Downloading PKGBUILD Repos..."
 msgstr ""
 
-#: src/pkgbuild.rs:422
+#: src/pkgbuild.rs:517
 msgid "failed to parse srcinfo generated by makepkg"
 msgstr ""
 
@@ -1083,31 +1103,31 @@ msgstr ""
 msgid "aur search failed"
 msgstr ""
 
-#: src/search.rs:291 src/search.rs:344 src/search.rs:416
+#: src/search.rs:296 src/search.rs:357 src/search.rs:433
 msgid "[installed: {}]"
 msgstr ""
 
-#: src/search.rs:293 src/search.rs:346 src/search.rs:418
+#: src/search.rs:300 src/search.rs:361 src/search.rs:437
 msgid "[installed]"
 msgstr ""
 
-#: src/search.rs:338
+#: src/search.rs:350
 msgid "[out-of-date: {}]"
 msgstr ""
 
-#: src/search.rs:353
+#: src/search.rs:368
 msgid "[orphaned]"
 msgstr ""
 
-#: src/search.rs:497
+#: src/search.rs:523
 msgid "no packages match search"
 msgstr ""
 
-#: src/search.rs:535
+#: src/search.rs:561
 msgid "Packages to install (eg: 1 2 3, 1-3):"
 msgstr ""
 
-#: src/search.rs:537
+#: src/search.rs:563
 msgid "Select packages (eg: 1 2 3, 1-3):"
 msgstr ""
 
@@ -1147,43 +1167,55 @@ msgstr ""
 msgid "Looking for devel upgrades..."
 msgstr ""
 
-#: src/upgrade.rs:192 src/upgrade.rs:205
+#: src/upgrade.rs:192 src/upgrade.rs:205 src/upgrade.rs:223 src/upgrade.rs:238
 msgid "warning:"
 msgstr ""
 
-#: src/upgrade.rs:194 src/upgrade.rs:207
+#: src/upgrade.rs:194 src/upgrade.rs:207 src/upgrade.rs:240
 msgid "{pkg}: ignoring package upgrade ({old} => {new})"
 msgstr ""
 
-#: src/upgrade.rs:399
+#: src/upgrade.rs:224
+msgid "{}: skipping devel update check (ignored)"
+msgstr ""
+
+#: src/upgrade.rs:427
 msgid "Packages to exclude (eg: 1 2 3, 1-3):"
 msgstr ""
 
-#: src/util.rs:141
+#: src/util.rs:95
+msgid "{repo}/{pkg} provides {target}"
+msgstr ""
+
+#: src/util.rs:103
+msgid "Install {repo}/{pkg}?"
+msgstr ""
+
+#: src/util.rs:176
 msgid "[Y/n]:"
 msgstr ""
 
-#: src/util.rs:143
+#: src/util.rs:178
 msgid "[y/N]:"
 msgstr ""
 
-#: src/util.rs:161
+#: src/util.rs:196
 msgid "y"
 msgstr ""
 
-#: src/util.rs:161
+#: src/util.rs:196
 msgid "yes"
 msgstr ""
 
-#: src/util.rs:318
+#: src/util.rs:353
 msgid "Enter a number (default=1): "
 msgstr ""
 
-#: src/util.rs:333
+#: src/util.rs:368
 msgid "invalid number: {}"
 msgstr ""
 
-#: src/util.rs:343
+#: src/util.rs:378
 msgid "invalid value: {n} is not between 1 and {max}"
 msgstr ""
 

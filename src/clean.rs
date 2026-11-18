@@ -16,11 +16,13 @@ use anyhow::{Context, Result, bail};
 use srcinfo::Srcinfo;
 use tr::tr;
 
-pub fn clean(config: &Config) -> Result<()> {
+pub fn clean(config: &Config) -> Result<i32> {
+    let mut ret = 0;
     let mut failures = Vec::new();
     if config.mode.repo() {
         let result = exec::pacman(config, &config.args).and_then(|status| {
-            if status.code() == 0 {
+            ret = status.code();
+            if ret == 0 {
                 Ok(())
             } else {
                 bail!("pacman exited with code {}", status.code())
@@ -71,8 +73,8 @@ pub fn clean(config: &Config) -> Result<()> {
         }
     }
 
-    if failures.is_empty() {
-        Ok(())
+    if failures.is_empty() || ret != 0 {
+        Ok(ret)
     } else {
         bail!("Cache cleanup failed in {} stage(s)", failures.len())
     }
@@ -176,7 +178,11 @@ fn finish_entries(errors: Vec<String>) -> Result<()> {
 
 fn fix_perms(file: &Path) -> Result<()> {
     let pkg = file.join("pkg");
-    let mut perms = pkg.metadata()?.permissions();
+    let metadata = pkg.symlink_metadata()?;
+    if !metadata.is_dir() {
+        return Ok(());
+    }
+    let mut perms = metadata.permissions();
     perms.set_mode(0o755);
     set_permissions(pkg, perms)?;
     Ok(())
@@ -235,11 +241,7 @@ fn clean_aur_pkg(
         }
     }
 
-    do_remove(
-        config,
-        &config.fetch.clone_dir.join(srcinfo.base.pkgbase),
-        rm,
-    )
+    do_remove(config, &file.path(), rm)
 }
 
 fn do_remove(config: &Config, path: &Path, rm: bool) -> Result<()> {

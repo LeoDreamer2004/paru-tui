@@ -1,7 +1,7 @@
 use crate::RaurHandle;
 use crate::config::{Colors, Config, YesNoAll};
 use crate::exec::has_command;
-use crate::fmt::print_indent;
+use crate::fmt::{escape_control, print_indent};
 use crate::util::is_arch_repo;
 use crate::{exec, printtr};
 
@@ -17,7 +17,7 @@ use std::result::Result as StdResult;
 use alpm::Version;
 use alpm_utils::{AsTarg, DbListExt, Targ};
 use ansiterm::Style;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use aur_depends::AurBase;
 
 use globset::GlobSet;
@@ -282,7 +282,16 @@ fn pkgbuild_pkgbuilds(config: &Config, pkgbuild: &[Targ]) -> Result<i32> {
             continue;
         };
 
-        match pkgs.entry(base.srcinfo.pkgbase()) {
+        let pkgbase = base.srcinfo.pkgbase();
+        ensure!(
+            !pkgbase.is_empty()
+                && !pkgbase.starts_with(['-', '.'])
+                && pkgbase
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"@._+-".contains(&byte)),
+            tr!("invalid package base '{}'", escape_control(pkgbase))
+        );
+        match pkgs.entry(pkgbase) {
             Entry::Vacant(v) => {
                 v.insert(base);
             }
@@ -292,6 +301,28 @@ fn pkgbuild_pkgbuilds(config: &Config, pkgbuild: &[Targ]) -> Result<i32> {
                 }
             }
         }
+    }
+
+    let sources = pkgs
+        .values()
+        .map(|pkg| pkg.path.canonicalize())
+        .collect::<std::io::Result<Vec<_>>>()?;
+    for pkgbase in pkgs.keys() {
+        let destination = cwd.join(pkgbase);
+        let destination = if destination.exists() {
+            destination.canonicalize()?
+        } else {
+            destination
+        };
+        ensure!(
+            sources.iter().all(|source| {
+                !source.starts_with(&destination) && !destination.starts_with(source)
+            }),
+            tr!(
+                "copy destination for '{}' overlaps a source directory",
+                escape_control(pkgbase)
+            )
+        );
     }
 
     for (n, pkg) in pkgs.values().enumerate() {
@@ -482,10 +513,17 @@ pub async fn show_comments(config: &mut Config) -> Result<i32> {
 
         if config.sort_mode.is_top_down(false) {
             for (title, comment) in iter.into_iter() {
-                print_indent(c.bold, 0, 0, config.cols, " ", title.split_whitespace());
+                print_indent(
+                    c.bold,
+                    0,
+                    0,
+                    config.cols,
+                    " ",
+                    title.split_whitespace().map(escape_control),
+                );
 
                 for line in comment.trim().split('\n') {
-                    let line = line.split_whitespace();
+                    let line = line.split_whitespace().map(escape_control);
                     print!("    ");
                     print_indent(Style::new(), 4, 4, config.cols, " ", line);
                 }
@@ -493,10 +531,17 @@ pub async fn show_comments(config: &mut Config) -> Result<i32> {
             }
         } else {
             for (title, comment) in iter.into_iter().rev() {
-                print_indent(c.bold, 0, 0, config.cols, " ", title.split_whitespace());
+                print_indent(
+                    c.bold,
+                    0,
+                    0,
+                    config.cols,
+                    " ",
+                    title.split_whitespace().map(escape_control),
+                );
 
                 for line in comment.trim().split('\n') {
-                    let line = line.split_whitespace();
+                    let line = line.split_whitespace().map(escape_control);
                     print!("    ");
                     print_indent(Style::new(), 4, 4, config.cols, " ", line);
                 }
@@ -519,7 +564,10 @@ fn split_target_pkgbuilds<'a, T: AsTarg>(
 
     for targ in targets {
         let targ = targ.as_targ();
-        if config.mode.repo() && db.find_target(targ).is_ok() {
+        if config.mode.repo()
+            && let Ok(pkg) = db.find_target(targ)
+            && is_arch_source_repo(pkg.db().unwrap().name())
+        {
             local.push(targ);
             continue;
         }
@@ -659,6 +707,29 @@ pub async fn show_pkgbuilds(config: &mut Config) -> Result<i32> {
     Ok(0)
 }
 
+fn is_arch_source_repo(name: &str) -> bool {
+    is_arch_repo(name)
+        || matches!(
+            name,
+            "core-staging"
+                | "extra-staging"
+                | "multilib-staging"
+                | "gnome-unstable"
+                | "kde-unstable"
+                | "core-debug"
+                | "extra-debug"
+                | "multilib-debug"
+                | "core-testing-debug"
+                | "extra-testing-debug"
+                | "multilib-testing-debug"
+                | "core-staging-debug"
+                | "extra-staging-debug"
+                | "multilib-staging-debug"
+                | "gnome-unstable-debug"
+                | "kde-unstable-debug"
+        )
+}
+
 fn pipe_bat(config: &Config, pkgbuild: &[u8]) -> Result<()> {
     let mut command = Command::new(&config.bat_bin);
     command
@@ -673,4 +744,45 @@ fn pipe_bat(config: &Config, pkgbuild: &[u8]) -> Result<()> {
     let _ = child.stdin.as_mut().unwrap().write_all(pkgbuild);
     exec::wait(&command, &mut child)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_arch_repo, is_arch_source_repo};
+
+    #[test]
+    fn official_source_repositories() {
+        for repo in [
+            "core",
+            "extra-testing",
+            "core-staging",
+            "extra-staging-debug",
+            "gnome-unstable",
+            "kde-unstable-debug",
+            "multilib-testing-debug",
+        ] {
+            assert!(is_arch_source_repo(repo), "{repo}");
+        }
+    }
+
+    #[test]
+    fn custom_repositories_are_not_arch_source_repositories() {
+        for repo in [
+            "local",
+            "chaotic-aur",
+            "custom-staging",
+            "extra-staging-custom",
+            "core-debug-debug",
+        ] {
+            assert!(!is_arch_source_repo(repo), "{repo}");
+        }
+    }
+
+    #[test]
+    fn source_repositories_do_not_enable_search_links() {
+        for repo in ["core-debug", "extra-staging", "gnome-unstable"] {
+            assert!(is_arch_source_repo(repo), "{repo}");
+            assert!(!is_arch_repo(repo), "{repo}");
+        }
+    }
 }
